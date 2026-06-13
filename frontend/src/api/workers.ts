@@ -14,9 +14,10 @@ export const workersApi = {
   deployFromUrl: (accountId: number, name: string, url: string) => {
     return apiClient.post(`/workers/${accountId}/workers`, { name, url });
   },
-  deployPages: (accountId: number, name: string, files: File[]) => {
+  deployPages: (accountId: number, name: string, files: File[], skipCreateProject?: boolean) => {
     const formData = new FormData();
     formData.append('name', name);
+    if (skipCreateProject) formData.append('skipCreateProject', 'true');
     files.forEach(f => formData.append('files', f, f.name));
     return apiClient.post(`/workers/${accountId}/pages/deploy`, formData, { timeout: 120000 });
   },

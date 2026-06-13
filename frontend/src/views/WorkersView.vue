@@ -56,7 +56,7 @@
           <n-select v-model:value="deployForm.accountId" :options="accountOptions" />
         </n-form-item>
         <n-form-item label="名称">
-          <n-input v-model:value="deployForm.name" :placeholder="deployType === 'pages' ? 'Pages 项目名称' : 'Worker 名称'" />
+          <n-input v-model:value="deployForm.name" :placeholder="deployType === 'pages' ? 'Pages 项目名称' : 'Worker 名称'" :disabled="isRedeploy" />
         </n-form-item>
         <template v-if="deployType === 'worker'">
           <n-form-item label="部署方式">
@@ -808,12 +808,14 @@ const accountOptions = computed(() =>
 );
 
 // ============ Deploy ============
+const isRedeploy = ref(false);
 function openDeploy(type?: 'worker' | 'pages', prefillName?: string, prefillAccountId?: number) {
   deployType.value = type || 'worker';
   selectedFile.value = null;
   selectedZipFile.value = null;
   deploySource.value = 'file';
   deployUrl.value = '';
+  isRedeploy.value = !!prefillName;
   deployForm.value = {
     accountId: prefillAccountId || accountStore.accounts[0]?.id || null,
     name: prefillName || '',
@@ -838,7 +840,7 @@ async function handleDeploy() {
       }
       message.success('Worker 部署成功');
     } else {
-      await workersApi.deployPages(deployForm.value.accountId, deployForm.value.name, [selectedZipFile.value!]);
+      await workersApi.deployPages(deployForm.value.accountId, deployForm.value.name, [selectedZipFile.value!], isRedeploy.value);
       message.success('Pages 部署成功');
     }
     showDeployModal.value = false;

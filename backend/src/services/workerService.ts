@@ -489,7 +489,8 @@ export async function getWorkersUsageToday(account: Account): Promise<WorkersUsa
 export async function deployPages(
   account: Account,
   projectName: string,
-  files: Array<{ path: string; buffer: Buffer }>
+  files: Array<{ path: string; buffer: Buffer }>,
+  skipCreateProject = false
 ): Promise<any> {
   const accountId = account.account_id;
   if (!accountId) throw new Error('Account ID is required');
@@ -500,11 +501,13 @@ export async function deployPages(
 
   const cf = getCfClient(account);
 
-  // 1. Create project if not exists (409 = already exists)
-  try {
-    await cf.pages.projects.create({ account_id: accountId, name: projectName, production_branch: 'main' } as any);
-  } catch (e: any) {
-    if (e?.status !== 409) throw e;
+  // 1. Create project if not exists (skip if skipCreateProject is true)
+  if (!skipCreateProject) {
+    try {
+      await cf.pages.projects.create({ account_id: accountId, name: projectName, production_branch: 'main' } as any);
+    } catch (e: any) {
+      if (e?.status !== 409) throw e;  // 409 = already exists, ignore
+    }
   }
 
   // 2. Build manifest + deployment params

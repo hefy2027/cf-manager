@@ -172,7 +172,8 @@ async function handlePagesDeploy(req: Request, res: Response, next: NextFunction
         buffer: f.buffer,
       }));
     }
-    const result = await deployPages(account, name, files);
+    const skipCreateProject = req.body.skipCreateProject === 'true' || req.body.skipCreateProject === true;
+    const result = await deployPages(account, name, files, skipCreateProject);
     createAuditLog(account.id, 'deploy_pages', name, `${files.length} files`, 'success');
     console.log(`[Pages Deploy Route] Success for ${name}`);
     res.status(201).json(result);
