@@ -161,13 +161,13 @@ POST /v1/browser/render
 
 **支持的渲染模式：**
 
-| mode | 返回内容 |
-|---|---|
-| `screenshot` | Base64 编码的页面截图 |
-| `content` | 页面 HTML 源码 |
-| `markdown` | 页面内容转 Markdown |
-| `pdf` | Base64 编码的 PDF 文件 |
-| `links` | 页面中所有链接 |
+| mode | 返回字段 | 数据格式 |
+|---|---|---|
+| `screenshot` | `result.screenshot` | `data:image/png;base64,...` Data URL |
+| `content` | `result.html` | 原始 HTML 字符串 |
+| `markdown` | `result.markdown` | Markdown 文本 |
+| `pdf` | `result.pdf` | `data:application/pdf;base64,...` Data URL |
+| `links` | `result.links` | URL 字符串数组 |
 
 **请求示例：**
 
@@ -178,18 +178,85 @@ POST /v1/browser/render
 }
 ```
 
-**成功响应：**
+**成功响应 - screenshot 模式：**
 
 ```json
 {
   "success": true,
   "result": {
-    "data": "# Example Domain\n\nThis domain is for use in illustrative examples...",
-    "contentType": "text/markdown",
-    "browserMsUsed": 1234,
-    "url": "https://example.com"
+    "mode": "screenshot",
+    "screenshot": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
+    "duration": 2.345,
+    "browserMsUsed": 2345
   }
 }
+```
+
+**成功响应 - content 模式：**
+
+```json
+{
+  "success": true,
+  "result": {
+    "mode": "content",
+    "html": "<!DOCTYPE html><html><head><title>Example Domain</title></head><body>...</body></html>",
+    "duration": 1.234,
+    "browserMsUsed": 1234
+  }
+}
+```
+
+**成功响应 - markdown 模式：**
+
+```json
+{
+  "success": true,
+  "result": {
+    "mode": "markdown",
+    "markdown": "# Example Domain\n\nThis domain is for use in illustrative examples in documents...",
+    "duration": 1.567,
+    "browserMsUsed": 1567
+  }
+}
+```
+
+**成功响应 - pdf 模式：**
+
+```json
+{
+  "success": true,
+  "result": {
+    "mode": "pdf",
+    "pdf": "data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PAovVHlwZSAv...",
+    "duration": 3.456,
+    "browserMsUsed": 3456
+  }
+}
+```
+
+**成功响应 - links 模式：**
+
+```json
+{
+  "success": true,
+  "result": {
+    "mode": "links",
+    "links": [
+      "https://www.iana.org/domains/example",
+      "https://example.com/about",
+      "https://example.com/contact"
+    ],
+    "duration": 1.890,
+    "browserMsUsed": 1890
+  }
+}
+```
+
+> **说明：**
+> - `duration`：总耗时（秒），包含网络请求和浏览器渲染
+> - `browserMsUsed`：Cloudflare 浏览器实际渲染耗时（毫秒），用于配额计费
+> - `screenshot` 和 `pdf` 返回 Data URL 格式，可直接用于 `<img>` 标签或下载
+> - Data URL 前缀包含 MIME 类型，方便前端直接使用
 ```
 
 **错误响应：**
