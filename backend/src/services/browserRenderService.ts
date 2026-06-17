@@ -40,9 +40,11 @@ export async function renderPage(
     if (errorBrowserMs > 0) {
       trackUsage(account.id, 'browser_render_seconds', Math.ceil(errorBrowserMs / 1000));
     }
+    const retryAfter = parseInt(resp.headers.get('retry-after') || '0', 10);
     const text = await resp.text();
     const err = new Error(`${mode} 失败 (${resp.status}): ${text}`);
     (err as any).statusCode = resp.status;
+    (err as any).retryAfter = retryAfter;
     throw err;
   }
 

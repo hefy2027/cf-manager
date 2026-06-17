@@ -17,8 +17,16 @@ export interface BrowserRenderResponse {
   error?: { message: string; code: string; waitMs?: number };
 }
 
-function isDailyLimitError(msg: string): boolean {
-  return msg.includes('Browser time limit exceeded') || msg.includes('browser limit');
+const DAILY_LIMIT_RETRY_AFTER_THRESHOLD = 60;
+
+function isDailyLimitError(msg: string, retryAfter: number): boolean {
+  if (msg.includes('Browser time limit exceeded') || msg.includes('browser limit')) {
+    return true;
+  }
+  if (retryAfter > DAILY_LIMIT_RETRY_AFTER_THRESHOLD) {
+    return true;
+  }
+  return false;
 }
 
 export async function handleBrowserRender(req: BrowserRenderRequest): Promise<{ status: number; body: BrowserRenderResponse }> {
@@ -58,8 +66,9 @@ export async function handleBrowserRender(req: BrowserRenderRequest): Promise<{ 
   } catch (err: any) {
     const msg = err?.message || '';
     const statusCode = err?.statusCode || 500;
+    const retryAfter: number = err?.retryAfter || 0;
 
-    if (isDailyLimitError(msg)) {
+    if (isDailyLimitError(msg, retryAfter)) {
       markAccountExhausted(account.id);
       createAuditLog(account.id, 'browser_render', url, 'daily limit exceeded', 'error');
 
@@ -81,6 +90,10 @@ export async function handleBrowserRender(req: BrowserRenderRequest): Promise<{ 
       }
     }
 
-    return { status: statusCode, body: { success: false, error: { message: msg, code: statusCode === 429 ? 'RATE_LIMITED' : 'RENDER_FAILED' } } };
+    if (statusCode === 429) {
+      const waitMs = retryAfter > 0 ? retryAfter * 1000 : 10_000;
+      return { status: 429, body: { success: false, error: { message: msg, code: 'RATE_LIMITED', waitMs } } };
+    }
+    return { status: statusCode, body: { success: false, error: { message: msg, code: 'RENDER_FAILED' } } };
   }
 }
