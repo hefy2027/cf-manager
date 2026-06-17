@@ -38,6 +38,23 @@ export type AcquireResult =
   | { type: 'rate_limited'; waitMs: number }
   | { type: 'all_exhausted' };
 
+export interface BrowserRenderStatus {
+  available_accounts: number;
+  total_accounts: number;
+  token_interval_ms: number;
+}
+
+export function getBrowserRenderStatus(): BrowserRenderStatus {
+  ensureBuckets();
+  const accounts = getActiveAccountsByFeature('browser_render');
+  let available = 0;
+  for (const account of accounts) {
+    const bucket = buckets.get(account.id);
+    if (bucket && !bucket.exhausted) available++;
+  }
+  return { available_accounts: available, total_accounts: accounts.length, token_interval_ms: TOKEN_INTERVAL_MS };
+}
+
 export function acquireToken(): AcquireResult {
   ensureBuckets();
   const accounts = getActiveAccountsByFeature('browser_render');
