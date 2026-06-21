@@ -24,13 +24,17 @@
 
     <n-card title="代理设置" size="small" style="margin-bottom: 16px">
       <n-space vertical>
+        <n-space align="center">
+          <n-switch :value="proxyEnabled" @update:value="toggleProxy" :loading="proxyToggling" />
+          <n-text :depth="proxyEnabled ? 1 : 3">{{ proxyEnabled ? '代理已启用' : '代理已关闭' }}</n-text>
+        </n-space>
         <n-input-group>
           <n-input v-model:value="proxyUrl" placeholder="例如: http://127.0.0.1:7890 或 socks5://127.0.0.1:1080" clearable style="flex: 1" />
           <n-button type="info" :loading="proxyTesting" :disabled="!proxyUrl" @click="testProxy">测试</n-button>
           <n-button type="primary" :loading="proxySaving" @click="saveProxy">保存</n-button>
         </n-input-group>
         <n-text depth="3" style="font-size: 12px">
-          支持 HTTP/HTTPS 和 SOCKS5 代理协议，留空则不使用代理。所有 Cloudflare API 请求（SDK + 原生 fetch）均会通过此代理。
+          支持 HTTP/HTTPS 和 SOCKS5 代理协议。所有 Cloudflare API 请求（SDK + 原生 fetch）均会通过此代理。
         </n-text>
       </n-space>
     </n-card>
@@ -149,8 +153,10 @@ const loading = ref(false);
 const clearing = ref(false);
 const settings = ref<any>({});
 const proxyUrl = ref('');
+const proxyEnabled = ref(false);
 const proxySaving = ref(false);
 const proxyTesting = ref(false);
+const proxyToggling = ref(false);
 
 async function fetchSettings() {
   loading.value = true;
@@ -158,6 +164,7 @@ async function fetchSettings() {
     const { data } = await settingsApi.get();
     settings.value = data;
     proxyUrl.value = data.proxy_url || '';
+    proxyEnabled.value = !!data.proxy_enabled;
   } catch {
     settings.value = {};
   } finally {
@@ -165,10 +172,24 @@ async function fetchSettings() {
   }
 }
 
+async function toggleProxy(enabled: boolean) {
+  proxyToggling.value = true;
+  try {
+    const { data } = await apiClient.put('/settings/proxy', { proxy_enabled: enabled });
+    proxyEnabled.value = !!data.proxy_enabled;
+    message.success(enabled ? '代理已启用' : '代理已关闭');
+  } catch {
+    message.error('切换代理失败');
+  } finally {
+    proxyToggling.value = false;
+  }
+}
+
 async function saveProxy() {
   proxySaving.value = true;
   try {
-    await apiClient.put('/settings/proxy', { proxy_url: proxyUrl.value });
+    const { data } = await apiClient.put('/settings/proxy', { proxy_url: proxyUrl.value });
+    proxyEnabled.value = !!data.proxy_enabled;
     message.success('代理设置已保存');
   } catch {
     message.error('保存代理设置失败');

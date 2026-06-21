@@ -1,6 +1,6 @@
 import { Account } from '../models/account';
 import { getCfClient, getAuthHeaders } from './cfFactory';
-import { proxyFetch } from './proxyService';
+import { proxyFetch, buildCurlCommand } from './proxyService';
 import { getAllZones } from './accountRouter';
 import crypto from 'crypto';
 import { appLogger } from './logger';
@@ -427,23 +427,26 @@ export async function getWorkersUsageToday(account: Account): Promise<WorkersUsa
   `;
 
   const headers = getAuthHeaders(account);
-  const resp = await proxyFetch('https://api.cloudflare.com/client/v4/graphql', {
+  const fetchUrl = 'https://api.cloudflare.com/client/v4/graphql';
+  const fetchInit = {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       query,
-      variables: {
-        accountTag: accountId,
-        datetimeStart,
-        datetimeEnd,
-        todayDate: todayDate,
-      },
+      variables: { accountTag: accountId, datetimeStart, datetimeEnd, todayDate },
     }),
-  });
+  };
+  let resp;
+  try {
+    resp = await proxyFetch(fetchUrl, fetchInit);
+  } catch (e) {
+    appLogger.error(`[Workers Usage] Fetch failed for ${account.name}: ${e}\n[DEBUG curl] ${buildCurlCommand(fetchUrl, fetchInit)}`);
+    return { requests: 0, errors: 0, subrequests: 0, cpuTimeMs: 0 };
+  }
 
   if (!resp.ok) {
     const text = await resp.text();
-    appLogger.error(`[GraphQL] Workers usage query failed: ${resp.status} ${text}`);
+    appLogger.error(`[GraphQL] Workers usage query failed: ${resp.status} ${text}\n[DEBUG curl] ${buildCurlCommand(fetchUrl, fetchInit)}`);
     return { requests: 0, errors: 0, subrequests: 0, cpuTimeMs: 0 };
   }
 

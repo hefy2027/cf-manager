@@ -1,6 +1,6 @@
 import { Account } from '../models/account';
 import { getCfClient, getAuthHeaders } from './cfFactory';
-import { proxyFetch, type FetchResponse } from './proxyService';
+import { proxyFetch, buildCurlCommand, type FetchResponse } from './proxyService';
 import { appLogger } from './logger';
 
 export async function getAvailableModels(account: Account, taskFilter?: string): Promise<any[]> {
@@ -213,21 +213,22 @@ export async function getAiUsageToday(account: Account): Promise<AiUsage> {
   `;
 
   const headers = getAuthHeaders(account);
+  const fetchUrl = 'https://api.cloudflare.com/client/v4/graphql';
+  const fetchInit = {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query,
+      variables: { accountTag: accountId, start: todayStart, end: todayEnd },
+    }),
+  };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   let resp: FetchResponse;
   try {
-    resp = await proxyFetch('https://api.cloudflare.com/client/v4/graphql', {
-      method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query,
-        variables: { accountTag: accountId, start: todayStart, end: todayEnd },
-      }),
-      signal: controller.signal,
-    });
+    resp = await proxyFetch(fetchUrl, { ...fetchInit, signal: controller.signal });
   } catch (e) {
-    appLogger.error(`[AI Usage] Fetch failed for ${account.name}: ${e}`);
+    appLogger.error(`[AI Usage] Fetch failed for ${account.name}: ${e}\n[DEBUG curl] ${buildCurlCommand(fetchUrl, fetchInit)}`);
     return { totalNeurons: 0, models: [] };
   } finally {
     clearTimeout(timeout);

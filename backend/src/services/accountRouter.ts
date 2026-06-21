@@ -24,22 +24,21 @@ export async function getAllZones(): Promise<Array<Zone & { cfAccountId: number;
   if (cached) return cached;
 
   const accounts = getActiveAccountsByFeature('dns');
-  const allZones: Array<Zone & { cfAccountId: number; accountName: string }> = [];
 
-  for (const account of accounts) {
+  const results = await Promise.all(accounts.map(async (account) => {
     try {
       const cf = getCfClient(account);
       const zones: Zone[] = [];
       for await (const zone of cf.zones.list({ per_page: 100 })) {
         zones.push(zone as any);
       }
-      for (const zone of zones) {
-        allZones.push({ ...zone, cfAccountId: account.id, accountName: account.name });
-      }
+      return zones.map(zone => ({ ...zone, cfAccountId: account.id, accountName: account.name }));
     } catch (err) {
       appLogger.error(`Failed to fetch zones for account ${account.name}: ${err}`);
+      return [];
     }
-  }
+  }));
+  const allZones = results.flat();
 
   zonesCache.set(cacheKey, allZones);
   return allZones;

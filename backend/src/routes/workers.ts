@@ -40,22 +40,25 @@ const router = Router();
 router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const accounts = getActiveAccountsByFeature('workers');
-    const allItems: Array<any> = [];
-    for (const account of accounts) {
-      try {
-        const workers = await listWorkers(account);
-        allItems.push(...workers.map(w => ({ ...w, type: 'worker', cfAccountId: account.id, accountName: account.name })));
-      } catch (err) {
-        appLogger.error(`[Workers] Failed to list workers for ${account.name}: ${err}`);
+    const results = await Promise.all(accounts.map(async (account) => {
+      const items: Array<any> = [];
+      const [workers, pages] = await Promise.allSettled([
+        listWorkers(account),
+        listPages(account),
+      ]);
+      if (workers.status === 'fulfilled') {
+        items.push(...workers.value.map(w => ({ ...w, type: 'worker', cfAccountId: account.id, accountName: account.name })));
+      } else {
+        appLogger.error(`[Workers] Failed to list workers for ${account.name}: ${workers.reason}`);
       }
-      try {
-        const pages = await listPages(account);
-        allItems.push(...pages.map(p => ({ ...p, type: 'pages', cfAccountId: account.id, accountName: account.name })));
-      } catch (err) {
-        appLogger.error(`[Pages] Failed to list pages for ${account.name}: ${err}`);
+      if (pages.status === 'fulfilled') {
+        items.push(...pages.value.map(p => ({ ...p, type: 'pages', cfAccountId: account.id, accountName: account.name })));
+      } else {
+        appLogger.error(`[Pages] Failed to list pages for ${account.name}: ${pages.reason}`);
       }
-    }
-    res.json(allItems);
+      return items;
+    }));
+    res.json(results.flat());
   } catch (err) { next(err); }
 });
 
@@ -467,20 +470,15 @@ router.put('/:accountId/pages/:name/bindings', async (req: Request, res: Respons
 router.get('/usage', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const accounts = getActiveAccountsByFeature('workers');
-    const results: Array<{ accountId: number; accountName: string; requests: number; errors: number; subrequests: number; cpuTimeMs: number }> = [];
-    for (const account of accounts) {
+    const results = await Promise.all(accounts.map(async (account) => {
       try {
         const usage = await getWorkersUsageToday(account);
-        results.push({
-          accountId: account.id,
-          accountName: account.name,
-          ...usage,
-        });
+        return { accountId: account.id, accountName: account.name, ...usage };
       } catch (err) {
         appLogger.error(`[Usage] Failed for account ${account.name}: ${err}`);
-        results.push({ accountId: account.id, accountName: account.name, requests: 0, errors: 0, subrequests: 0, cpuTimeMs: 0 });
+        return { accountId: account.id, accountName: account.name, requests: 0, errors: 0, subrequests: 0, cpuTimeMs: 0 };
       }
-    }
+    }));
     res.json(results);
   } catch (err) { next(err); }
 });

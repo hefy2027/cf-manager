@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { config } from '../config';
 import { clearCache } from '../services/accountRouter';
 import { clearClientCache } from '../services/cfFactory';
-import { getProxyUrl, setProxyUrl, testProxyConnection } from '../services/proxyService';
+import { getProxyUrl, setProxyUrl, isProxyEnabled, setProxyEnabled, testProxyConnection } from '../services/proxyService';
 
 const router = Router();
 
@@ -12,6 +12,7 @@ router.get('/', (_req, res) => {
     api_secret_configured: !!config.apiSecret,
     db_path: config.dbPath,
     proxy_url: getProxyUrl(),
+    proxy_enabled: isProxyEnabled(),
   });
 });
 
@@ -22,14 +23,19 @@ router.post('/cache/clear', (_req, res) => {
 });
 
 router.put('/proxy', (req, res) => {
-  const { proxy_url } = req.body;
-  if (typeof proxy_url !== 'string') {
-    res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'proxy_url must be a string' } });
-    return;
+  const { proxy_url, proxy_enabled } = req.body;
+  if (proxy_url !== undefined) {
+    if (typeof proxy_url !== 'string') {
+      res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'proxy_url must be a string' } });
+      return;
+    }
+    setProxyUrl(proxy_url);
   }
-  setProxyUrl(proxy_url);
+  if (proxy_enabled !== undefined) {
+    setProxyEnabled(!!proxy_enabled);
+  }
   clearClientCache();
-  res.json({ success: true, proxy_url: getProxyUrl() });
+  res.json({ success: true, proxy_url: getProxyUrl(), proxy_enabled: isProxyEnabled() });
 });
 
 router.post('/proxy/test', async (req, res) => {

@@ -23,6 +23,18 @@ function isSocks(url: string): boolean {
   return /^socks[45h]?:\/\//i.test(url);
 }
 
+export function isProxyEnabled(): boolean {
+  const val = getSetting('proxy_enabled');
+  if (val !== undefined) return val === '1';
+  return !!config.proxyUrl;
+}
+
+export function setProxyEnabled(enabled: boolean): void {
+  setSetting('proxy_enabled', enabled ? '1' : '0');
+  cachedAgent = undefined;
+  cachedUrl = '';
+}
+
 export function getProxyUrl(): string {
   const dbVal = getSetting('proxy_url');
   if (dbVal !== undefined) return dbVal;
@@ -36,6 +48,7 @@ export function setProxyUrl(url: string): void {
 }
 
 export function getHttpAgent(): Agent | undefined {
+  if (!isProxyEnabled()) return undefined;
   const url = getProxyUrl();
   if (!url) return undefined;
   if (url === cachedUrl && cachedAgent) return cachedAgent;
@@ -63,6 +76,26 @@ export async function proxyFetch(input: string | URL, init?: any): Promise<Fetch
     }
     throw err;
   }
+}
+
+export function buildCurlCommand(url: string, init?: any): string {
+  const proxyUrl = getProxyUrl();
+  const parts = ['curl -s'];
+  if (proxyUrl) parts.push(`-x '${proxyUrl}'`);
+  if (init?.method && init.method !== 'GET') parts.push(`-X ${init.method}`);
+  if (init?.headers) {
+    for (const [k, v] of Object.entries(init.headers)) {
+      const val = k.toLowerCase() === 'authorization' ? (v as string).replace(/^(Bearer\s+).+/, '$1***') : v;
+      parts.push(`-H '${k}: ${val}'`);
+    }
+  }
+  if (init?.body) {
+    const body = typeof init.body === 'string' ? init.body : JSON.stringify(init.body);
+    const truncated = body.length > 500 ? body.substring(0, 500) + '...' : body;
+    parts.push(`-d '${truncated.replace(/'/g, "'\\''")}'`);
+  }
+  parts.push(`'${url}'`);
+  return parts.join(' \\\n  ');
 }
 
 export async function testProxyConnection(proxyUrl: string): Promise<{ latency_ms: number; status: number }> {
