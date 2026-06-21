@@ -6,6 +6,68 @@ import { getWorkersUsageToday } from '../services/quotaTracker';
 
 const app = new Hono<{ Bindings: Env }>();
 
+async function extractZipFiles(zipData: Uint8Array): Promise<Array<{ path: string; buffer: Uint8Array }>> {
+  const files: Array<{ path: string; buffer: Uint8Array }> = [];
+  const view = new DataView(zipData.buffer, zipData.byteOffset, zipData.byteLength);
+
+  let eocdOffset = -1;
+  for (let i = zipData.length - 22; i >= 0; i--) {
+    if (view.getUint32(i, true) === 0x06054b50) { eocdOffset = i; break; }
+  }
+  if (eocdOffset < 0) return files;
+
+  const cdOffset = view.getUint32(eocdOffset + 16, true);
+  const cdEntries = view.getUint16(eocdOffset + 10, true);
+  let pos = cdOffset;
+
+  for (let i = 0; i < cdEntries; i++) {
+    if (view.getUint32(pos, true) !== 0x02014b50) break;
+    const compression = view.getUint16(pos + 10, true);
+    const compSize = view.getUint32(pos + 20, true);
+    const uncompSize = view.getUint32(pos + 24, true);
+    const nameLen = view.getUint16(pos + 28, true);
+    const extraLen = view.getUint16(pos + 30, true);
+    const commentLen = view.getUint16(pos + 32, true);
+    const localHeaderOffset = view.getUint32(pos + 42, true);
+    const name = new TextDecoder().decode(zipData.slice(pos + 46, pos + 46 + nameLen));
+    pos += 46 + nameLen + extraLen + commentLen;
+
+    if (name.endsWith('/')) continue;
+
+    const localNameLen = view.getUint16(localHeaderOffset + 26, true);
+    const localExtraLen = view.getUint16(localHeaderOffset + 28, true);
+    const dataStart = localHeaderOffset + 30 + localNameLen + localExtraLen;
+
+    let fileData: Uint8Array;
+    if (compression === 0) {
+      fileData = zipData.slice(dataStart, dataStart + uncompSize);
+    } else if (compression === 8) {
+      const compressed = zipData.slice(dataStart, dataStart + compSize);
+      const ds = new DecompressionStream('deflate-raw');
+      const writer = ds.writable.getWriter();
+      const reader = ds.readable.getReader();
+      writer.write(compressed);
+      writer.close();
+      const chunks: Uint8Array[] = [];
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+      const total = chunks.reduce((s, c) => s + c.length, 0);
+      fileData = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) { fileData.set(chunk, offset); offset += chunk.length; }
+    } else {
+      continue;
+    }
+
+    const cleanPath = name.replace(/\\/g, '/').replace(/^\/+/, '');
+    files.push({ path: cleanPath, buffer: fileData });
+  }
+  return files;
+}
+
 async function requireAccount(c: any) {
   const id = parseInt(c.req.param('accountId'), 10);
   const account = await getAccountById(c.env.DB, id);
@@ -99,6 +161,13 @@ app.delete('/:accountId/pages/:name', async (c) => {
   await cfFetch(account, `/accounts/${account.account_id}/pages/projects/${name}`, c.env.ENCRYPTION_KEY, { method: 'DELETE' });
   await addAuditLog(c.env.DB, { account_id: account.id, action: 'delete_pages', target: name, status: 'success' });
   return c.json({ success: true });
+});
+
+// ============ Worker Logs (Tail) ============
+app.get('/:accountId/workers/:name/logs', async (c) => {
+  const account = await requireAccount(c);
+  const data = await cfFetch<any>(account, `/accounts/${account.account_id}/workers/scripts/${c.req.param('name')}/tails`, c.env.ENCRYPTION_KEY);
+  return c.json(data.result ?? data);
 });
 
 // ============ Secrets ============
@@ -339,6 +408,70 @@ app.get('/usage', async (c) => {
   return c.json(results);
 });
 
+// ============ Pages Deploy ============
+async function sha256Hex(data: Uint8Array): Promise<string> {
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+app.post('/:accountId/pages/deploy', async (c) => {
+  const account = await requireAccount(c);
+  const formData = await c.req.formData();
+  const name = formData.get('name') as string;
+  if (!name) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Project name is required' } }, 400);
+
+  const skipCreateProject = formData.get('skipCreateProject') === 'true';
+  const uploadedFiles = formData.getAll('files') as File[];
+
+  let files: Array<{ path: string; buffer: Uint8Array }> = [];
+
+  if (uploadedFiles.length === 1 && uploadedFiles[0].name?.toLowerCase().endsWith('.zip')) {
+    return c.json({ error: { code: 'NOT_SUPPORTED', message: 'ZIP upload not supported in Worker version. Please extract and upload individual files.' } }, 400);
+  }
+
+  for (const f of uploadedFiles) {
+    const buf = new Uint8Array(await f.arrayBuffer());
+    files.push({ path: f.name.replace(/\\/g, '/').replace(/^\/+/, ''), buffer: buf });
+  }
+
+  if (!skipCreateProject) {
+    try {
+      await cfFetch(account, `/accounts/${account.account_id}/pages/projects`, c.env.ENCRYPTION_KEY, {
+        method: 'POST', body: JSON.stringify({ name, production_branch: 'main' }),
+      });
+    } catch (e: any) {
+      if (!e.body?.includes('already exists') && e.status !== 409) throw e;
+    }
+  }
+
+  if (files.length === 0) {
+    const project = await cfFetch(account, `/accounts/${account.account_id}/pages/projects/${name}`, c.env.ENCRYPTION_KEY);
+    return c.json(project.result || project, 201);
+  }
+
+  const manifest: Record<string, string> = {};
+  const deployForm = new FormData();
+
+  for (const f of files) {
+    const hash = await sha256Hex(f.buffer);
+    manifest[f.path] = hash;
+    deployForm.append(f.path, new Blob([f.buffer], { type: 'application/octet-stream' }), f.path);
+  }
+
+  deployForm.append('manifest', JSON.stringify(manifest));
+  deployForm.append('branch', 'main');
+  deployForm.append('commit_message', 'Deploy via CF Manager');
+
+  const resp = await cfFetchRaw(account, `/accounts/${account.account_id}/pages/projects/${name}/deployments`, c.env.ENCRYPTION_KEY, {
+    method: 'POST', body: deployForm,
+  });
+  const result = await resp.json();
+  if (!resp.ok) throw new Error(`Pages deploy failed: ${JSON.stringify(result)}`);
+
+  await addAuditLog(c.env.DB, { account_id: account.id, action: 'deploy_pages', target: name, detail: `${files.length} files`, status: 'success' });
+  return c.json(result, 201);
+});
+
 // ============ Batch Deploy ============
 app.post('/batch-deploy', async (c) => {
   const contentType = c.req.header('content-type') || '';
@@ -383,6 +516,139 @@ app.post('/batch-deploy', async (c) => {
       return { ...t, success: false, error: err.message };
     }
   }));
+  return c.json(results);
+});
+
+// ============ Batch Deploy Pages ============
+app.post('/batch-deploy-pages', async (c) => {
+  const form = await c.req.formData();
+  const targets = JSON.parse(form.get('targets') as string);
+  const zipFile = form.get('zipFile') as File | null;
+
+  if (!Array.isArray(targets) || targets.length === 0) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'targets must be a non-empty array' } }, 400);
+  if (!zipFile) return c.json({ error: { code: 'NO_FILE', message: 'Zip file is required' } }, 400);
+
+  const zipBuffer = new Uint8Array(await zipFile.arrayBuffer());
+  const files = await extractZipFiles(zipBuffer);
+
+  if (files.length === 0) return c.json({ error: { code: 'EMPTY_ZIP', message: 'Zip file contains no files' } }, 400);
+
+  const results: Array<{ accountId: number; workerName: string; success: boolean; error?: string }> = [];
+  for (const t of targets) {
+    try {
+      const account = await getAccountById(c.env.DB, t.accountId);
+      if (!account) { results.push({ ...t, success: false, error: 'Account not found' }); continue; }
+
+      try {
+        await cfFetch(account, `/accounts/${account.account_id}/pages/projects`, c.env.ENCRYPTION_KEY, {
+          method: 'POST', body: JSON.stringify({ name: t.workerName, production_branch: 'main' }),
+        });
+      } catch (e: any) {
+        if (!e.body?.includes('already exists') && e.status !== 409) throw e;
+      }
+
+      const manifest: Record<string, string> = {};
+      const deployForm = new FormData();
+      for (const f of files) {
+        const hash = await sha256Hex(f.buffer);
+        manifest[f.path] = hash;
+        deployForm.append(f.path, new Blob([f.buffer], { type: 'application/octet-stream' }), f.path);
+      }
+      deployForm.append('manifest', JSON.stringify(manifest));
+      deployForm.append('branch', 'main');
+      deployForm.append('commit_message', 'Batch deploy via CF Manager');
+
+      const resp = await cfFetchRaw(account, `/accounts/${account.account_id}/pages/projects/${t.workerName}/deployments`, c.env.ENCRYPTION_KEY, {
+        method: 'POST', body: deployForm,
+      });
+      if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`Deploy failed: ${errBody}`);
+      }
+      await addAuditLog(c.env.DB, { account_id: account.id, action: 'batch_deploy_pages', target: t.workerName, detail: `${files.length} files`, status: 'success' });
+      results.push({ ...t, success: true });
+    } catch (err: any) {
+      results.push({ ...t, success: false, error: err.message });
+    }
+  }
+  return c.json(results);
+});
+
+// ============ Environment Sync ============
+app.post('/env-sync/preview', async (c) => {
+  const body = await c.req.json();
+  const { source, targets, syncTypes } = body;
+  if (!source?.accountId || !source?.workerName || !Array.isArray(targets))
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'source and targets are required' } }, 400);
+
+  const sourceAccount = await getAccountById(c.env.DB, source.accountId);
+  if (!sourceAccount) return c.json({ error: { code: 'NOT_FOUND', message: 'Source account not found' } }, 404);
+
+  const doSecrets = !syncTypes || syncTypes.includes('secrets');
+  let sourceSecrets: any[] = [];
+  if (doSecrets) {
+    const data = await cfFetch<{ result: any[] }>(sourceAccount, `/accounts/${sourceAccount.account_id}/workers/scripts/${source.workerName}/secrets`, c.env.ENCRYPTION_KEY);
+    sourceSecrets = data.result || [];
+  }
+
+  const diffs: any[] = [];
+  for (const t of targets) {
+    const tAccount = await getAccountById(c.env.DB, t.accountId);
+    if (!tAccount) continue;
+    let tSecrets: any[] = [];
+    if (doSecrets) {
+      const data = await cfFetch<{ result: any[] }>(tAccount, `/accounts/${tAccount.account_id}/workers/scripts/${t.workerName}/secrets`, c.env.ENCRYPTION_KEY);
+      tSecrets = data.result || [];
+    }
+    const tNames = new Set(tSecrets.map((s: any) => s.name));
+    const added = sourceSecrets.filter((s: any) => !tNames.has(s.name)).map((s: any) => s.name);
+    const existing = sourceSecrets.filter((s: any) => tNames.has(s.name)).map((s: any) => s.name);
+    diffs.push({ accountId: t.accountId, workerName: t.workerName, secrets: { added, existing } });
+  }
+  return c.json(diffs);
+});
+
+app.post('/env-sync/execute', async (c) => {
+  const body = await c.req.json();
+  const { source, targets, syncTypes, secretValues } = body;
+  if (!source?.accountId || !source?.workerName || !Array.isArray(targets))
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'source and targets are required' } }, 400);
+  if (!secretValues || typeof secretValues !== 'object')
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'secretValues is required' } }, 400);
+
+  const sourceAccount = await getAccountById(c.env.DB, source.accountId);
+  if (!sourceAccount) return c.json({ error: { code: 'NOT_FOUND', message: 'Source account not found' } }, 404);
+
+  const doSecrets = !syncTypes || syncTypes.includes('secrets');
+  let sourceSecrets: any[] = [];
+  if (doSecrets) {
+    const data = await cfFetch<{ result: any[] }>(sourceAccount, `/accounts/${sourceAccount.account_id}/workers/scripts/${source.workerName}/secrets`, c.env.ENCRYPTION_KEY);
+    sourceSecrets = data.result || [];
+  }
+
+  const results: Array<{ accountId: number; workerName: string; success: boolean; synced: number; error?: string }> = [];
+  for (const t of targets) {
+    try {
+      const tAccount = await getAccountById(c.env.DB, t.accountId);
+      if (!tAccount) { results.push({ ...t, success: false, synced: 0, error: 'Account not found' }); continue; }
+      let synced = 0;
+      if (doSecrets) {
+        for (const s of sourceSecrets) {
+          const val = secretValues[s.name];
+          if (val !== undefined) {
+            await cfFetch(tAccount, `/accounts/${tAccount.account_id}/workers/scripts/${t.workerName}/secrets`, c.env.ENCRYPTION_KEY, {
+              method: 'PUT', body: JSON.stringify({ name: s.name, type: s.type || 'secret_text', text: val }),
+            });
+            synced++;
+          }
+        }
+      }
+      await addAuditLog(c.env.DB, { account_id: tAccount.id, action: 'env_sync', target: t.workerName, detail: `from ${source.workerName}, ${synced} secrets`, status: 'success' });
+      results.push({ ...t, success: true, synced });
+    } catch (err: any) {
+      results.push({ ...t, success: false, synced: 0, error: err.message });
+    }
+  }
   return c.json(results);
 });
 

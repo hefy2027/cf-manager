@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import type { Env } from './types';
 import { authMiddleware } from './middleware/auth';
 import { errorHandler } from './middleware/errorHandler';
+import { responseWrapper } from './middleware/responseWrapper';
 import { getRecentLogs } from './db/models';
 import { getQuotaSummary, syncUsageFromCloudflare } from './services/quotaTracker';
 import { getFakeNginxPage } from './pages/fakeNginx';
@@ -20,6 +21,7 @@ const app = new Hono<{ Bindings: Env }>();
 
 app.use('*', cors());
 app.use('*', errorHandler);
+app.use('/api/*', responseWrapper);
 
 app.onError((err: any, c) => {
   const status = err.statusCode || err.status || 500;

@@ -103,7 +103,7 @@ app.post('/:id/test', async (c) => {
   }
 
   await updateAccount(db, id, { is_active: 1 });
-  return c.json({ success: true, user });
+  return c.json({ user });
 });
 
 export default app;

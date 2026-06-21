@@ -94,7 +94,7 @@ app.post('/:accountId/kv/:nsId/bulk-delete', async (c) => {
   await cfFetch(account, `${acctPath(account)}/storage/kv/namespaces/${c.req.param('nsId')}/bulk`, c.env.ENCRYPTION_KEY, {
     method: 'DELETE', body: JSON.stringify(keys),
   });
-  return c.json({ success: true, deleted: keys.length });
+  return c.json({ success: true });
 });
 
 // ============ D1 Databases ============
@@ -158,7 +158,7 @@ app.get('/:accountId/r2', async (c) => {
     return c.json(data.result?.buckets || []);
   } catch (e: any) {
     if (e.body?.includes('10042') || e.body?.includes('enable R2')) {
-      return c.json({ r2_not_enabled: true, buckets: [] });
+      return c.json({ success: false, error: { code: 'R2_NOT_ENABLED', message: 'R2 is not enabled for this account' } }, 403);
     }
     throw e;
   }
@@ -214,7 +214,44 @@ app.post('/:accountId/r2/:bucket/bulk-delete', async (c) => {
   await Promise.all(keys.map(key =>
     cfFetch(account, `${acctPath(account)}/r2/buckets/${c.req.param('bucket')}/objects/${encodeURIComponent(key)}`, c.env.ENCRYPTION_KEY, { method: 'DELETE' })
   ));
-  return c.json({ success: true, deleted: keys.length });
+  return c.json({ success: true });
+});
+
+app.get('/:accountId/r2/:bucket/download', async (c) => {
+  const account = await requireAccount(c);
+  const key = c.req.query('key');
+  if (!key) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'object key is required (query param)' } }, 400);
+  const resp = await cfFetchRaw(account, `${acctPath(account)}/r2/buckets/${c.req.param('bucket')}/objects/${encodeURIComponent(key)}`, c.env.ENCRYPTION_KEY);
+  if (!resp.ok) {
+    const body = await resp.text();
+    return c.json({ error: { code: 'R2_ERROR', message: body } }, resp.status as any);
+  }
+  const ct = resp.headers.get('content-type') || 'application/octet-stream';
+  const inline = c.req.query('inline') === '1' || c.req.query('inline') === 'true';
+  const filename = key.split('/').pop() || 'download';
+  return new Response(resp.body, {
+    headers: {
+      'Content-Type': ct,
+      'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${filename}"`,
+    },
+  });
+});
+
+app.put('/:accountId/r2/:bucket/upload', async (c) => {
+  const account = await requireAccount(c);
+  const form = await c.req.formData();
+  const key = form.get('key') as string;
+  const file = form.get('file') as File | null;
+  if (!key) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'key is required' } }, 400);
+  if (!file) return c.json({ error: { code: 'NO_FILE', message: 'file is required' } }, 400);
+  const buffer = await file.arrayBuffer();
+  await cfFetchRaw(account, `${acctPath(account)}/r2/buckets/${c.req.param('bucket')}/objects/${encodeURIComponent(key)}`, c.env.ENCRYPTION_KEY, {
+    method: 'PUT',
+    body: buffer,
+    headers: { 'Content-Type': file.type || 'application/octet-stream' } as any,
+  });
+  await addAuditLog(c.env.DB, { account_id: account.id, action: 'r2_upload', target: `${c.req.param('bucket')}/${key}`, detail: `${buffer.byteLength} bytes`, status: 'success' });
+  return c.json({ success: true });
 });
 
 export default app;

@@ -19,14 +19,14 @@ const app = new Hono<{ Bindings: Env }>();
 app.post('/', async (c) => {
   const { url, mode = 'screenshot', accountId } = await c.req.json();
 
-  if (!url || typeof url !== 'string') return c.json({ success: false, error: { message: 'url is required', code: 'INVALID_REQUEST' } }, 400);
-  if (!VALID_MODES.includes(mode)) return c.json({ success: false, error: { message: `Invalid mode: ${mode}`, code: 'INVALID_MODE' } }, 400);
+  if (!url || typeof url !== 'string') return c.json({ error: { message: 'url is required', code: 'INVALID_REQUEST' } }, 400);
+  if (!VALID_MODES.includes(mode)) return c.json({ error: { message: `Invalid mode: ${mode}`, code: 'INVALID_MODE' } }, 400);
 
   const account = accountId
     ? await getAccountById(c.env.DB, accountId)
     : await selectBestAccount(c.env.DB, c.env.ENCRYPTION_KEY, 'browser_render_seconds');
 
-  if (!account) return c.json({ success: false, error: { message: 'No available account', code: 'NO_ACCOUNTS' } }, 503);
+  if (!account) return c.json({ error: { message: 'No available account', code: 'NO_ACCOUNTS' } }, 503);
 
   const headers = await getAuthHeaders(account, c.env.ENCRYPTION_KEY);
   const endpoint = `https://api.cloudflare.com/client/v4/accounts/${account.account_id}/browser-rendering/${mode}`;
@@ -42,7 +42,7 @@ app.post('/', async (c) => {
     const browserMs = parseInt(resp.headers.get('x-browser-ms-used') || '0', 10);
     if (browserMs > 0) await trackUsage(c.env.DB, account.id, 'browser_render_seconds', Math.ceil(browserMs / 1000));
     const text = await resp.text();
-    return c.json({ success: false, error: { message: `${mode} failed (${resp.status}): ${text}`, code: 'RENDER_FAILED' } }, resp.status as any);
+    return c.json({ error: { message: `${mode} failed (${resp.status}): ${text}`, code: 'RENDER_FAILED' } }, resp.status as any);
   }
 
   const browserMsUsed = parseInt(resp.headers.get('x-browser-ms-used') || '0', 10);
