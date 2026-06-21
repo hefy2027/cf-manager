@@ -25,8 +25,12 @@ const distDir = path.resolve(frontendDir, 'dist');
 console.log('[1/4] Installing frontend dependencies...');
 execSync('npm install', { cwd: frontendDir, stdio: 'inherit' });
 
-console.log('[2/4] Building frontend...');
-execSync('npm run build', { cwd: frontendDir, stdio: 'inherit' });
+console.log('[2/4] Building frontend (base=/admin/)...');
+execSync('npm run build', {
+  cwd: frontendDir,
+  stdio: 'inherit',
+  env: { ...process.env, VITE_BASE_URL: '/admin/' },
+});
 
 console.log('[3/4] Copying frontend assets to public/...');
 clean(publicDir);
@@ -56,3 +60,4 @@ console.log(`  Worker:  ${workerSize} KB`);
 console.log(`  ZIP:     worker/cf-manager.zip (${zipSize} MB)`);
 console.log(`\nDashboard upload: worker/cf-manager.zip`);
 console.log(`CLI deploy:       cd worker && npm run deploy`);
+console.log(`\nAccess: https://your-domain.com/admin/`);

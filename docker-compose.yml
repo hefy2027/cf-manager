@@ -26,10 +26,14 @@ services:
     build:
       context: .
       dockerfile: docker/frontend/Dockerfile
+      args:
+        - BASE_URL=${BASE_URL:-/}
     restart: unless-stopped
     network_mode: bridge
     ports:
-      - "3000:80"
+      - "${APP_PORT:-3000}:80"
+    environment:
+      - BASE_URL=${BASE_URL:-/}
     depends_on:
       - backend
 

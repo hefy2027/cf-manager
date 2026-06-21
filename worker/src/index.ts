@@ -5,6 +5,7 @@ import { authMiddleware } from './middleware/auth';
 import { errorHandler } from './middleware/errorHandler';
 import { getRecentLogs } from './db/models';
 import { getQuotaSummary, syncUsageFromCloudflare } from './services/quotaTracker';
+import { getFakeNginxPage } from './pages/fakeNginx';
 
 import accountsRouter from './routes/accounts';
 import dnsRouter from './routes/dns';
@@ -74,13 +75,25 @@ app.get('/api/audit-log', async (c) => {
 app.use('/v1/*', authMiddleware);
 app.route('/v1', openaiRouter);
 
-app.all('*', async (c) => {
-  const res = await c.env.ASSETS.fetch(c.req.raw);
-  if (res.status === 404) {
-    const index = await c.env.ASSETS.fetch(new Request(new URL('/', c.req.url)));
-    return new Response(index.body, { ...index, headers: new Headers(index.headers) });
+app.get('/admin', (c) => c.redirect('/admin/', 302));
+
+app.all('/admin/*', async (c) => {
+  const url = new URL(c.req.url);
+  const strippedPath = url.pathname.replace(/^\/admin/, '') || '/';
+  const assetUrl = new URL(strippedPath, url.origin).toString();
+  const res = await c.env.ASSETS.fetch(new Request(assetUrl));
+  if (res.status !== 404) {
+    return res;
   }
-  return res;
+  const index = await c.env.ASSETS.fetch(new Request(new URL('/index.html', url.origin).toString()));
+  return new Response(index.body, {
+    status: 200,
+    headers: new Headers(index.headers),
+  });
+});
+
+app.all('*', (c) => {
+  return c.html(getFakeNginxPage());
 });
 
 export default app;
