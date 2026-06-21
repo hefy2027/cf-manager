@@ -16,7 +16,8 @@
     "@cloudflare/workers-types": "^4",
     "adm-zip": "^0.5",
     "esbuild": "^0.25",
-    "wrangler": "^4",
-    "typescript": "^5"
+    "javascript-obfuscator": "^5.4.3",
+    "typescript": "^5",
+    "wrangler": "^4"
   }
 }

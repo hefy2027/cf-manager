@@ -4,12 +4,12 @@
 
 ## 在线演示
 
-| | |
-|---|---|
-| 地址 | [https://cfmgr.pages.dev/](https://cfmgr.pages.dev/) |
-| 密码 | `cfmgrbest` |
+| |                                                                  |
+|---|------------------------------------------------------------------|
+| 地址 | [https://mgrcf.pages.dev/admin/](https://cfmgr.pages.dev/admin/) |
+| 密码 | `mgrcfbest`                                                      |
 
-> 演示站部署在 Cloudflare Pages + D1，无需 Docker。
+> 演示站部署在 Cloudflare Pages + D1，无需 Docker。根路径显示伪装的 nginx 欢迎页，管理界面通过 `/admin/` 访问。
 
 ---
 
@@ -66,6 +66,7 @@
 ### 安全特性
 - API Token 加密存储（AES 加密）
 - 可选的 API Secret 认证保护管理界面
+- 管理界面隐藏在 `/admin/` 路径，根路径伪装为 nginx 默认页
 - 操作审计日志
 
 ---
@@ -90,7 +91,7 @@ npm install
 npm run build    # 构建 → worker/cf-manager.zip
 ```
 
-将 `cf-manager.zip` 上传至 Cloudflare Pages Dashboard，配置 D1 绑定和环境变量即可。
+将 `cf-manager.zip` 上传至 Cloudflare Pages Dashboard，配置 D1 绑定和环境变量即可。管理界面通过 `/admin/` 路径访问。
 
 ### Docker 部署
 
@@ -104,12 +105,13 @@ cp .env.example .env
 
 # 3. 编辑 .env，至少设置 ENCRYPTION_KEY
 #    可选设置 API_SECRET（管理界面登录密码）、PROXY_URL（代理地址）
+#    可选设置 BASE_URL（前端访问路径，如 /admin/）
 
 # 4. 一键部署
 chmod +x deploy.sh
 ./deploy.sh
 
-# 5. 访问 http://localhost:3000
+# 5. 访问 http://localhost:3000（或 http://localhost:3000/admin/ 如果设置了 BASE_URL）
 ```
 
 ### 环境变量
@@ -120,6 +122,7 @@ chmod +x deploy.sh
 | `API_SECRET` | 否 | 管理界面访问密码，留空则无需登录 |
 | `PROXY_URL` | 否 | HTTP/SOCKS5 代理地址，如 `http://127.0.0.1:7890` 或 `socks5://127.0.0.1:1080` |
 | `APP_PORT` | 否 | 对外暴露端口，默认 `3000` |
+| `BASE_URL` | 否 | 前端访问路径，如 `/admin/`，默认 `/`（仅 Docker 部署需要，Worker 版固定为 `/admin/`） |
 
 ### 本地开发
 
@@ -175,7 +178,8 @@ cf-manager/
 │   ├── backend/Dockerfile
 │   └── frontend/
 │       ├── Dockerfile
-│       └── nginx.conf
+│       ├── nginx.conf.template  # Nginx 配置模板（支持 BASE_URL）
+│       └── entrypoint.sh        # 容器启动脚本
 ├── docs/                    # 文档
 │   ├── api-v1.md            # 外部 API 接口文档
 │   └── account-auth.md      # 账户认证方式说明

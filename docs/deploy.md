@@ -36,6 +36,7 @@ cp .env.example .env
 | `API_SECRET` | 否 | 管理界面访问密码，留空则无需登录 |
 | `PROXY_URL` | 否 | HTTP/SOCKS5 代理地址，如 `socks5://127.0.0.1:1080` |
 | `APP_PORT` | 否 | 对外暴露端口，默认 `3000` |
+| `BASE_URL` | 否 | 前端访问路径，如 `/admin/`，默认 `/`。设置后需重新构建镜像 |
 
 ### 启动服务
 
@@ -51,7 +52,7 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-访问 `http://<your-server-ip>:3000`。
+访问 `http://<your-server-ip>:3000`（如配置了 `BASE_URL=/admin/`，则访问 `http://<your-server-ip>:3000/admin/`）。
 
 ### 更新
 
@@ -151,7 +152,7 @@ npm run build
 ```
 
 这一条命令会自动完成：
-1. 安装前端依赖并构建
+1. 安装前端依赖并构建（base=/admin/）
 2. 复制前端资源到 `public/`
 3. 将 Worker 后端 TypeScript 打包为 `public/_worker.js`
 4. 自动压缩为 `worker/cf-manager.zip`
@@ -177,7 +178,9 @@ npm run build
 
 #### 5. 访问
 
-部署成功后，访问 `https://cf-manager.<your-subdomain>.pages.dev`。
+部署成功后，访问 `https://cf-manager.<your-subdomain>.pages.dev/admin/`。
+
+> 根路径显示伪装的 nginx 欢迎页面，管理界面固定通过 `/admin/` 路径访问。
 
 #### 更新
 
@@ -255,7 +258,9 @@ npm run deploy
 4. 生成 ZIP（备份）
 5. 部署到 Cloudflare Pages
 
-部署完成后，终端会输出访问 URL（如 `https://cf-manager.your-subdomain.pages.dev`）。
+部署完成后，终端会输出访问 URL（如 `https://cf-manager.your-subdomain.pages.dev/admin/`）。
+
+> 根路径显示伪装的 nginx 欢迎页面，管理界面固定通过 `/admin/` 路径访问。
 
 #### 更新
 
@@ -281,8 +286,11 @@ wrangler pages project add-domain cf-manager your-domain.com
                      ┌──────────────────┐
   用户 ──── HTTPS ──▶│  Cloudflare Edge │
                      │                  │
-                     │  静态资源 → Pages │
-                     │  /api/* → Worker │
+                     │  /        → Fake │
+                     │            Nginx │
+                     │  /admin/* → SPA  │
+                     │  /api/*  → API   │
+                     │  /v1/*   → API   │
                      │                  │
                      │  ┌────────────┐  │
                      │  │ Hono App   │  │

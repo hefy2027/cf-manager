@@ -80,11 +80,15 @@ app.get('/admin', (c) => c.redirect('/admin/', 302));
 app.all('/admin/*', async (c) => {
   const url = new URL(c.req.url);
   const strippedPath = url.pathname.replace(/^\/admin/, '') || '/';
-  const assetUrl = new URL(strippedPath, url.origin).toString();
-  const res = await c.env.ASSETS.fetch(new Request(assetUrl));
-  if (res.status !== 404) {
-    return res;
+
+  if (/\.\w+$/.test(strippedPath)) {
+    const assetUrl = new URL(strippedPath, url.origin).toString();
+    const res = await c.env.ASSETS.fetch(new Request(assetUrl));
+    if (res.status !== 404) {
+      return res;
+    }
   }
+
   const index = await c.env.ASSETS.fetch(new Request(new URL('/index.html', url.origin).toString()));
   return new Response(index.body, {
     status: 200,

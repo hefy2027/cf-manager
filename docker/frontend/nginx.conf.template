@@ -1,0 +1,75 @@
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Backend address via Docker default bridge gateway
+    set $backend http://172.17.0.1:3001;
+
+    # gzip
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml text/javascript image/svg+xml;
+    gzip_min_length 256;
+
+    # SPA: all unknown routes -> index.html (with base URL support)
+    location ${BASE_URL} {
+        alias /usr/share/nginx/html/;
+        try_files $uri $uri/ ${BASE_URL}index.html;
+    }
+
+    # Backend API proxy
+    location /api/ {
+        proxy_pass $backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # SSE streaming support
+        proxy_set_header Connection '';
+        proxy_buffering off;
+        proxy_cache off;
+        chunked_transfer_encoding off;
+        proxy_read_timeout 300s;
+
+        proxy_intercept_errors on;
+        error_page 502 503 504 = @backend_down;
+    }
+
+    # External API proxy (OpenAI-compatible / Browser Render)
+    location /v1/ {
+        proxy_pass $backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # SSE streaming support
+        proxy_set_header Connection '';
+        proxy_buffering off;
+        proxy_cache off;
+        chunked_transfer_encoding off;
+        proxy_read_timeout 300s;
+
+        proxy_intercept_errors on;
+        error_page 502 503 504 = @backend_down;
+    }
+
+    location @backend_down {
+        default_type application/json;
+        return 503 '{"error":{"code":"BACKEND_UNAVAILABLE","message":"Backend service is not ready yet. Please retry in a few seconds."}}';
+    }
+
+    # static assets cache
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # upload size limit (for Worker scripts, Pages bundles, R2 objects)
+    client_max_body_size 100m;
+}
