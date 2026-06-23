@@ -14,12 +14,12 @@ on:
       project_name:
         description: 'Pages 项目名称'
         required: false
-        default: 'cf-manager'
+        default: 'cfmgr'
         type: string
       d1_database_name:
         description: 'D1 数据库名称'
         required: false
-        default: 'cf-manager'
+        default: 'cfmgr'
         type: string
       encryption_key:
         description: '加密密钥（用于加密存储 API Token）'
@@ -75,6 +75,7 @@ jobs:
       - name: Update wrangler.toml
         working-directory: worker
         run: |
+          sed -i '/^main = /d' wrangler.toml
           sed -i "s/database_id = \".*\"/database_id = \"${{ steps.d1.outputs.database_id }}\"/" wrangler.toml
           sed -i "s/^name = \".*\"/name = \"${{ github.event.inputs.project_name }}\"/" wrangler.toml
 
