@@ -78,6 +78,7 @@ jobs:
         working-directory: worker
         run: |
           sed -i '/^main = /d' wrangler.toml
+          sed -i '/^\[vars\]/,/^$/d' wrangler.toml
           sed -i "s/database_id = \".*\"/database_id = \"${{ steps.d1.outputs.database_id }}\"/" wrangler.toml
           sed -i "s/^name = \".*\"/name = \"${{ github.event.inputs.project_name }}\"/" wrangler.toml
 
