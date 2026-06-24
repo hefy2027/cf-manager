@@ -99,20 +99,56 @@ jobs:
         run: |
           wrangler pages project create "${{ github.event.inputs.project_name }}" --production-branch main 2>/dev/null || echo "Project already exists, skipping creation"
 
+      - name: Configure environment variables (production + preview)
+        run: |
+          PROJECT_NAME="${{ github.event.inputs.project_name }}"
+          ENCRYPTION_KEY_VAL="${{ github.event.inputs.encryption_key }}"
+          API_SECRET_VAL="${{ github.event.inputs.api_secret }}"
+          DEMO_IDS_VAL="${{ github.event.inputs.demo_account_ids }}"
+
+          # Get account ID
+          ACCOUNT_ID=$(curl -s \
+            -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
+            -H "X-Auth-Key: $CLOUDFLARE_API_KEY" \
+            "https://api.cloudflare.com/client/v4/accounts?per_page=1" | jq -r '.result[0].id')
+          echo "Account ID: $ACCOUNT_ID"
+
+          # Build env_vars JSON for each environment
+          ENV_VARS='{"ENCRYPTION_KEY": {"type": "secret_text", "value": "'"$ENCRYPTION_KEY_VAL"'"}}'
+          if [ -n "$API_SECRET_VAL" ]; then
+            ENV_VARS=$(echo "$ENV_VARS" | jq --arg v "$API_SECRET_VAL" '. + {"API_SECRET": {"type": "secret_text", "value": $v}}')
+          fi
+          if [ -n "$DEMO_IDS_VAL" ]; then
+            ENV_VARS=$(echo "$ENV_VARS" | jq --arg v "$DEMO_IDS_VAL" '. + {"DEMO_ACCOUNT_IDS": {"type": "plain_text", "value": $v}}')
+          fi
+
+          PAYLOAD=$(jq -n --argjson vars "$ENV_VARS" '{
+            deployment_configs: {
+              production: { env_vars: $vars },
+              preview: { env_vars: $vars }
+            }
+          }')
+
+          echo "Setting env vars for both production and preview..."
+          RESULT=$(curl -s -X PATCH \
+            "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/pages/projects/$PROJECT_NAME" \
+            -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
+            -H "X-Auth-Key: $CLOUDFLARE_API_KEY" \
+            -H "Content-Type: application/json" \
+            --data "$PAYLOAD")
+
+          SUCCESS=$(echo "$RESULT" | jq -r '.success')
+          if [ "$SUCCESS" = "true" ]; then
+            echo "✅ Environment variables set for both production and preview"
+          else
+            echo "❌ Failed to set environment variables:"
+            echo "$RESULT" | jq '.errors'
+            exit 1
+          fi
+
       - name: Deploy to Cloudflare Pages
         working-directory: worker
         run: wrangler pages deploy public/ --project-name "${{ github.event.inputs.project_name }}" --branch main --commit-dirty=true
-
-      - name: Configure secrets
-        working-directory: worker
-        run: |
-          echo "${{ github.event.inputs.encryption_key }}" | wrangler pages secret put ENCRYPTION_KEY --project-name "${{ github.event.inputs.project_name }}"
-          if [ -n "${{ github.event.inputs.api_secret }}" ]; then
-            echo "${{ github.event.inputs.api_secret }}" | wrangler pages secret put API_SECRET --project-name "${{ github.event.inputs.project_name }}"
-          fi
-          if [ -n "${{ github.event.inputs.demo_account_ids }}" ]; then
-            echo "${{ github.event.inputs.demo_account_ids }}" | wrangler pages secret put DEMO_ACCOUNT_IDS --project-name "${{ github.event.inputs.project_name }}"
-          fi
 
       - name: Deployment summary
         run: |
