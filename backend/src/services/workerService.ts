@@ -52,7 +52,7 @@ export async function deployWorker(account: Account, name: string, scriptContent
   const cf = getCfClient(account);
   const result = await cf.workers.scripts.update(name, {
     account_id: accountId!,
-    metadata: { main_module: 'worker.js' } as any,
+    metadata: { main_module: 'worker.js', compatibility_date: '2024-01-01' } as any,
     'worker.js': new Blob([scriptContent], { type: 'application/javascript+module' })
   } as any);
   return result as any;
