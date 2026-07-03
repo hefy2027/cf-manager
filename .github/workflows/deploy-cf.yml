@@ -116,20 +116,33 @@ jobs:
           # --- 完全覆盖：清空 KV ---
           if [ "${{ github.event.inputs.full_wipe }}" = "true" ]; then
             echo "完全覆盖模式：清空 KV 命名空间..."
-            # 先删除旧的 namespace（wrangler 会提示绑定丢失，不影响重建）
-            KV_OLD_ID=$(wrangler kv:namespace list 2>/dev/null | grep "$KV_NAME" | grep -oE '[0-9a-f]{32}' || echo "")
+            # 列出所有 namespace 并找到匹配的 ID（wrangler v3/v4 输出格式兼容）
+            KV_LIST=$(wrangler kv:namespace list 2>&1)
+            echo "$KV_LIST" | head -20
+            KV_OLD_ID=$(echo "$KV_LIST" | grep -i "$KV_NAME" | grep -oE '[0-9a-f]{32}' | head -1 || echo "")
             if [ -n "$KV_OLD_ID" ]; then
-              wrangler kv:namespace delete --namespace-id "$KV_OLD_ID" --force 2>/dev/null || echo "KV 删除失败或不存在，继续..."
-              sleep 2
+              echo "删除旧 KV namespace: $KV_OLD_ID"
+              wrangler kv:namespace delete --namespace-id "$KV_OLD_ID" || true
+              echo "等待删除生效..."
+              sleep 5
+            else
+              echo "未找到同名 KV namespace，跳过删除"
             fi
           fi
 
-          KV_ID=$(wrangler kv:namespace list 2>/dev/null | grep "$KV_NAME" | grep -oE '[0-9a-f]{32}' || echo "")
+          # 重新查找（可能已经被删除）
+          KV_LIST=$(wrangler kv:namespace list 2>&1)
+          KV_ID=$(echo "$KV_LIST" | grep -i "$KV_NAME" | grep -oE '[0-9a-f]{32}' | head -1 || echo "")
 
           if [ -z "$KV_ID" ]; then
             echo "Creating KV namespace: $KV_NAME"
             KV_OUTPUT=$(wrangler kv:namespace create "$KV_NAME" 2>&1)
+            echo "$KV_OUTPUT"
             KV_ID=$(echo "$KV_OUTPUT" | grep -oE '[0-9a-f]{32}' | head -1)
+            if [ -z "$KV_ID" ]; then
+              echo "ERROR: 无法创建 KV namespace，请检查 API Key 权限或 namespace 配额"
+              exit 1
+            fi
             echo "Created KV namespace with ID: $KV_ID"
           else
             echo "KV namespace already exists: $KV_NAME (ID: $KV_ID)"
@@ -186,7 +199,7 @@ jobs:
           echo "| 配置项 | 值 |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-----|" >> $GITHUB_STEP_SUMMARY
           echo "| CF 邮箱 | ${{ github.event.inputs.cf_email }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| CF API Key | ${{ github.event.inputs.cf_api_key }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| CF API Key | **** (已隐藏) |" >> $GITHUB_STEP_SUMMARY
           echo "| Pages 项目 | ${{ github.event.inputs.project_name }} |" >> $GITHUB_STEP_SUMMARY
           echo "| D1 数据库 | ${{ github.event.inputs.d1_database_name }} (${{ steps.d1.outputs.database_id }}) |" >> $GITHUB_STEP_SUMMARY
           echo "| KV 命名空间 | ${{ github.event.inputs.kv_namespace_name }} (${{ steps.kv.outputs.kv_namespace_id }}) |" >> $GITHUB_STEP_SUMMARY
