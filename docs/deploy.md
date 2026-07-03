@@ -301,7 +301,7 @@ database_id = "你的数据库ID"
 #### 3. 创建 KV 命名空间（可选但推荐）
 
 ```bash
-npx wrangler kv:namespace create cfmgr
+npx wrangler kv namespace create cfmgr
 ```
 
 将输出的 `id` 填入 `wrangler.toml`：

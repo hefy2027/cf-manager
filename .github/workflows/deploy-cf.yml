@@ -75,19 +75,29 @@ jobs:
           # --- 完全覆盖：删除旧数据库 ---
           if [ "${{ github.event.inputs.full_wipe }}" = "true" ]; then
             echo "完全覆盖模式：尝试删除旧 D1 数据库..."
-            DB_OLD_ID=$(wrangler d1 list 2>/dev/null | grep "$DB_NAME" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' || echo "")
+            DB_OLD_ID=$(wrangler d1 list 2>&1 | grep -i "$DB_NAME" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1 || echo "")
             if [ -n "$DB_OLD_ID" ]; then
-              wrangler d1 delete "$DB_NAME" --force 2>/dev/null || echo "删除失败，继续..."
+              echo "找到数据库 ID: $DB_OLD_ID，正在删除..."
+              wrangler d1 delete "$DB_NAME" -y 2>&1 || echo "通过名称删除失败，尝试通过 ID..."
+              # 等待删除生效
+              sleep 3
+            else
+              echo "未在列表中匹配到数据库，尝试按名称删除..."
+              wrangler d1 delete "$DB_NAME" -y 2>&1 || echo "数据库可能不存在或已被删除"
               sleep 2
             fi
           fi
 
-          DB_ID=$(wrangler d1 list 2>/dev/null | grep "$DB_NAME" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' || echo "")
+          # 获取数据库 ID
+          DB_LIST=$(wrangler d1 list 2>&1 || true)
+          echo "$DB_LIST" | head -10
+          DB_ID=$(echo "$DB_LIST" | grep -i "$DB_NAME" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1 || echo "")
 
           if [ -z "$DB_ID" ]; then
             echo "Creating D1 database: $DB_NAME"
             wrangler d1 create "$DB_NAME"
-            DB_ID=$(wrangler d1 list | grep "$DB_NAME" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+            DB_LIST2=$(wrangler d1 list 2>&1)
+            DB_ID=$(echo "$DB_LIST2" | grep -i "$DB_NAME" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
             echo "Created database with ID: $DB_ID"
 
             echo "Initializing database schema..."
@@ -95,7 +105,12 @@ jobs:
           else
             echo "Database already exists: $DB_NAME (ID: $DB_ID)"
             if [ "${{ github.event.inputs.full_wipe }}" = "true" ]; then
-              echo "重新初始化数据库 Schema..."
+              echo "完全覆盖模式：清空所有表数据..."
+              wrangler d1 execute "$DB_NAME" --command="DROP TABLE IF EXISTS quota_usage" --remote || true
+              wrangler d1 execute "$DB_NAME" --command="DROP TABLE IF EXISTS audit_log" --remote || true
+              wrangler d1 execute "$DB_NAME" --command="DROP TABLE IF EXISTS app_settings" --remote || true
+              wrangler d1 execute "$DB_NAME" --command="DROP TABLE IF EXISTS accounts" --remote || true
+              echo "重新初始化 Schema..."
               wrangler d1 execute "$DB_NAME" --file=worker/src/db/schema.sql --remote
             fi
           fi
@@ -116,13 +131,13 @@ jobs:
           # --- 完全覆盖：清空 KV ---
           if [ "${{ github.event.inputs.full_wipe }}" = "true" ]; then
             echo "完全覆盖模式：清空 KV 命名空间..."
-            # 列出所有 namespace 并找到匹配的 ID（wrangler v3/v4 输出格式兼容）
-            KV_LIST=$(wrangler kv:namespace list 2>&1)
-            echo "$KV_LIST" | head -20
-            KV_OLD_ID=$(echo "$KV_LIST" | grep -i "$KV_NAME" | grep -oE '[0-9a-f]{32}' | head -1 || echo "")
+            echo "=== wrangler kv namespace list 输出 ==="
+            KV_LIST_FULL=$(wrangler kv namespace list 2>&1 || true)
+            echo "$KV_LIST_FULL"
+            KV_OLD_ID=$(echo "$KV_LIST_FULL" | grep -oE '[0-9a-f]{32}' | head -1 || echo "")
             if [ -n "$KV_OLD_ID" ]; then
               echo "删除旧 KV namespace: $KV_OLD_ID"
-              wrangler kv:namespace delete --namespace-id "$KV_OLD_ID" || true
+              wrangler kv namespace delete --namespace-id "$KV_OLD_ID" -y || true
               echo "等待删除生效..."
               sleep 5
             else
@@ -130,24 +145,44 @@ jobs:
             fi
           fi
 
-          # 重新查找（可能已经被删除）
-          KV_LIST=$(wrangler kv:namespace list 2>&1)
-          KV_ID=$(echo "$KV_LIST" | grep -i "$KV_NAME" | grep -oE '[0-9a-f]{32}' | head -1 || echo "")
+          # 查找已有 namespace 的 ID
+          echo "=== 查询已有 KV namespace ==="
+          KV_LIST=$(wrangler kv namespace list 2>&1 || true)
+          echo "$KV_LIST"
+
+          # 尝试从输出中提取 32 位 hex ID（wrangler v4 格式兼容）
+          KV_ID=$(echo "$KV_LIST" | grep -oE '[0-9a-f]{32}' | head -1 || echo "")
 
           if [ -z "$KV_ID" ]; then
-            echo "Creating KV namespace: $KV_NAME"
-            KV_OUTPUT=$(wrangler kv:namespace create "$KV_NAME" 2>&1)
+            echo "未找到已有 namespace，尝试创建..."
+            KV_OUTPUT=$(wrangler kv namespace create "$KV_NAME" 2>&1 || true)
             echo "$KV_OUTPUT"
-            KV_ID=$(echo "$KV_OUTPUT" | grep -oE '[0-9a-f]{32}' | head -1)
-            if [ -z "$KV_ID" ]; then
-              echo "ERROR: 无法创建 KV namespace，请检查 API Key 权限或 namespace 配额"
-              exit 1
+
+            if echo "$KV_OUTPUT" | grep -qi "already exists"; then
+              echo "⚠ 提示 namespace 已存在，重新 list 查 ID..."
+              KV_LIST2=$(wrangler kv namespace list 2>&1 || true)
+              echo "$KV_LIST2"
+              KV_ID=$(echo "$KV_LIST2" | grep -oE '[0-9a-f]{32}' | head -1 || echo "")
+            else
+              # 新创建的，从 create 输出中提取 ID
+              KV_ID=$(echo "$KV_OUTPUT" | grep -oE '[0-9a-f]{32}' | head -1 || echo "")
+              # 如果 create 输出没有 ID，可能是以 list 形式展示，重新查询
+              if [ -z "$KV_ID" ]; then
+                echo "create 输出中未找到 ID，重新查询..."
+                KV_LIST3=$(wrangler kv namespace list 2>&1 || true)
+                echo "$KV_LIST3"
+                KV_ID=$(echo "$KV_LIST3" | grep -oE '[0-9a-f]{32}' | head -1 || echo "")
+              fi
             fi
-            echo "Created KV namespace with ID: $KV_ID"
-          else
-            echo "KV namespace already exists: $KV_NAME (ID: $KV_ID)"
           fi
 
+          if [ -z "$KV_ID" ]; then
+            echo "ERROR: 无法获取 KV namespace ID"
+            echo "请手动在 CF Dashboard 中查询 $KV_NAME 的 namespace ID 并填入 wrangler.toml"
+            exit 1
+          fi
+
+          echo "KV namespace ready: $KV_NAME (ID: $KV_ID)"
           echo "kv_namespace_id=$KV_ID" >> $GITHUB_OUTPUT
 
       - name: Update wrangler.toml
@@ -180,13 +215,6 @@ jobs:
           if [ -n "${{ github.event.inputs.demo_account_ids }}" ]; then
             echo "${{ github.event.inputs.demo_account_ids }}" | wrangler pages secret put DEMO_ACCOUNT_IDS --project-name "${{ github.event.inputs.project_name }}"
           fi
-
-      - name: Bind KV to Pages project
-        run: |
-          echo "Binding KV namespace to Pages project..."
-          wrangler pages deployment set-kv-bindings --project-name "${{ github.event.inputs.project_name }}" \
-            --kv-namespace "${{ github.event.inputs.kv_namespace_name }}" \
-            --binding-name KV 2>/dev/null || echo "KV binding 设置失败或已存在"
 
       - name: Deploy to Cloudflare Pages
         working-directory: worker
