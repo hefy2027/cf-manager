@@ -79,8 +79,8 @@ router.delete('/:id', (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = parseInt(req.params.id as string, 10);
     const account = getAccountById(id);
-    deleteAccount(id);
     createAuditLog(id, 'delete_account', account?.name || String(id), null, 'success');
+    deleteAccount(id);
     res.json({ success: true });
   } catch (err) { next(err); }
 });
