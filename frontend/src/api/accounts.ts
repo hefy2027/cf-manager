@@ -19,6 +19,8 @@ export const accountsApi = {
     apiClient.patch(`/accounts/${id}/features`, { enabled_features }),
   clearExhausted: (id: number) =>
     apiClient.post(`/accounts/${id}/clear-exhausted`),
+  getCredentials: (id: number) =>
+    apiClient.get(`/accounts/${id}/credentials`),
   importCsv: (file: File, skipVerify = false) => {
     const formData = new FormData();
     formData.append('file', file);

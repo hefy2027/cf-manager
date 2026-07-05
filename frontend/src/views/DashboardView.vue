@@ -22,12 +22,8 @@
 
     <n-space v-if="globalStats.totalAccounts > 0" style="margin: 12px 0; flex-shrink: 0" :wrap="true">
       <n-tag>{{ globalStats.totalAccounts }} 账户</n-tag>
-      <n-tag v-if="globalStats.nearExhaustion > 0" type="warning">
-        {{ globalStats.nearExhaustion }} 快
-      </n-tag>
-      <n-tag v-if="globalStats.exhaustedAccounts > 0" type="error">
-        {{ globalStats.exhaustedAccounts }} 尽
-      </n-tag>
+      <n-tag v-if="globalStats.aiExhausted > 0" type="error">🤖 {{ globalStats.aiExhausted }}</n-tag>
+      <n-tag v-if="globalStats.browserExhausted > 0" type="error">🖥️ {{ globalStats.browserExhausted }}</n-tag>
       <n-tag type="info">
         AI {{ formatCompact(globalStats.aiNeuronsTotal) }} · W {{ formatCompact(globalStats.workersRequestsTotal) }} · R {{ formatCompact(globalStats.browserRenderTotal) }}s
       </n-tag>
@@ -56,6 +52,36 @@
     </n-spin>
 
     <n-h3 style="margin: 0; flex-shrink: 0">最近操作日志</n-h3>
+    <n-space style="flex-shrink: 0" :wrap="true" align="center" :size="8">
+      <n-select
+        v-model:value="logFilter.action"
+        :options="actionOptions"
+        placeholder="操作类型"
+        clearable
+        filterable
+        size="small"
+        style="width: 160px"
+      />
+      <n-date-picker
+        v-model:formatted-value="logFilter.startDate"
+        type="date"
+        value-format="yyyy-MM-dd"
+        placeholder="开始日期"
+        clearable
+        size="small"
+        style="width: 140px"
+      />
+      <n-date-picker
+        v-model:formatted-value="logFilter.endDate"
+        type="date"
+        value-format="yyyy-MM-dd"
+        placeholder="结束日期"
+        clearable
+        size="small"
+        style="width: 140px"
+      />
+      <n-button size="small" type="primary" :loading="loadingLogs" @click="fetchLogs">查询</n-button>
+    </n-space>
     <div class="log-table-wrapper" style="flex: 1; min-height: 0; overflow: auto">
 
         <n-data-table
@@ -72,12 +98,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, reactive } from 'vue';
 import { useQuotaStore } from '../stores/quotaStore';
 import apiClient from '../api/client';
 import type { DataTableColumns } from 'naive-ui';
 import { formatCN, formatCNShort } from '../utils/dateFormat';
-import { calcPercentage } from '../utils/quota';
 import CompactAccountCard from '../components/CompactAccountCard.vue';
 
 const quotaStore = useQuotaStore();
@@ -148,15 +173,12 @@ const globalStats = computed(() => {
   );
   const totalAccounts = accounts.length;
 
-  const nearExhaustion = accounts.filter((acct: any) =>
-    acct.resources.some((r: any) => {
-      const pct = calcPercentage(r);
-      return pct > 90;
-    }),
+  const aiExhausted = accounts.filter((acct: any) =>
+    acct.resources.some((r: any) => r.resource === 'ai_neurons' && r.exhausted),
   ).length;
 
-  const exhaustedAccounts = accounts.filter((acct: any) =>
-    acct.resources.some((r: any) => r.exhausted),
+  const browserExhausted = accounts.filter((acct: any) =>
+    acct.resources.some((r: any) => r.resource === 'browser_render_seconds' && r.exhausted),
   ).length;
 
   const aiNeuronsTotal = accounts.reduce((sum: number, acct: any) => {
@@ -180,11 +202,65 @@ const globalStats = computed(() => {
     return sum + (r?.count || 0);
   }, 0);
 
-  return { totalAccounts, nearExhaustion, exhaustedAccounts, aiNeuronsTotal, workersRequestsTotal, browserRenderTotal };
+  return { totalAccounts, aiExhausted, browserExhausted, aiNeuronsTotal, workersRequestsTotal, browserRenderTotal };
 });
 
 const auditLogs = ref<any[]>([]);
 const loadingLogs = ref(false);
+const ACTION_LABELS: Record<string, string> = {
+  ai_chat_completion: 'AI 对话',
+  browser_render: '浏览器渲染',
+  create_account: '创建账户',
+  import_account: '导入账户',
+  delete_account: '删除账户',
+  update_features: '更新功能',
+  test_account: '测试账户',
+  view_credentials: '查看凭证',
+  clear_exhausted: '清除耗尽',
+  create_dns: '创建DNS',
+  update_dns: '更新DNS',
+  delete_dns: '删除DNS',
+  deploy_worker: '部署Worker',
+  delete_worker: '删除Worker',
+  deploy_pages: '部署Pages',
+  delete_pages: '删除Pages',
+  batch_deploy: '批量部署',
+  batch_deploy_pages: '批量部署Pages',
+  env_sync: '环境同步',
+  kv_write: 'KV操作',
+  task_create: '创建任务',
+  task_delete: '删除任务',
+  task_run: '执行任务',
+};
+const actionOptions = Object.entries(ACTION_LABELS).map(([value, label]) => ({ label, value }));
+function actionLabel(action: string): string {
+  return ACTION_LABELS[action] || action;
+}
+const STATUS_LABELS: Record<string, string> = { success: '成功', error: '失败' };
+function statusLabel(status: string): string {
+  return STATUS_LABELS[status] || status;
+}
+const logFilter = reactive<{ action: string | null; startDate: string | null; endDate: string | null }>({
+  action: null,
+  startDate: null,
+  endDate: null,
+});
+
+async function fetchLogs() {
+  loadingLogs.value = true;
+  try {
+    const params: Record<string, string> = {};
+    if (logFilter.action) params.action = logFilter.action;
+    if (logFilter.startDate) params.startDate = logFilter.startDate;
+    if (logFilter.endDate) params.endDate = logFilter.endDate;
+    const { data } = await apiClient.get('/audit-log', { params });
+    auditLogs.value = data;
+  } catch {
+    auditLogs.value = [];
+  } finally {
+    loadingLogs.value = false;
+  }
+}
 
 const isMobile = computed(() => windowWidth.value < 640);
 
@@ -193,19 +269,19 @@ const logColumns = computed<DataTableColumns<any>>(() => {
     return [
       { title: '时间', key: 'created_at', width: 70, render: (row) => formatCNShort(row.created_at) },
       { title: '账号', key: 'account_name', width: 65, render: (row) => row.account_name || '-' },
-      { title: '操作', key: 'action', width: 60 },
+      { title: '操作', key: 'action', width: 60, render: (row) => actionLabel(row.action) },
       { title: '目标', key: 'target', width: 85, ellipsis: { tooltip: true } },
       { title: '详情', key: 'detail', width: 70, minWidth: 60, ellipsis: { tooltip: true } },
-      { title: '状态', key: 'status', width: 45 },
+      { title: '状态', key: 'status', width: 45, render: (row) => statusLabel(row.status) },
     ];
   }
   return [
-    { title: '时间', key: 'created_at', width: 180, render: (row) => formatCN(row.created_at) },
+    { title: '时间', key: 'created_at', width: 150, render: (row) => formatCN(row.created_at) },
     { title: '账号', key: 'account_name', width: 120, render: (row) => row.account_name || '-' },
-    { title: '操作', key: 'action', width: 150 },
+    { title: '操作', key: 'action', width: 150, render: (row) => actionLabel(row.action) },
     { title: '目标', key: 'target', width: 150, ellipsis: { tooltip: true } },
-    { title: '详情', key: 'detail', width: 160, minWidth: 120, ellipsis: { tooltip: true } },
-    { title: '状态', key: 'status', width: 80 },
+    { title: '详情', key: 'detail', width: 180, minWidth: 120, ellipsis: { tooltip: true } },
+    { title: '状态', key: 'status', width: 80, render: (row) => statusLabel(row.status) },
   ];
 });
 
@@ -219,13 +295,7 @@ const scrollX = computed(() => {
 onMounted(async () => {
   window.addEventListener('resize', onResize);
   quotaStore.fetchQuota();
-  loadingLogs.value = true;
-  try {
-    const { data } = await apiClient.get('/audit-log');
-    auditLogs.value = data;
-  } finally {
-    loadingLogs.value = false;
-  }
+  await fetchLogs();
 });
 
 onUnmounted(() => {

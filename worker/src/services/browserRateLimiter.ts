@@ -158,9 +158,10 @@ export async function markAccountExhausted(env: Env, accountId: number): Promise
       exhausted: true,
       date: todayUtc(),
     });
-  } else {
-    await setExhausted(env.DB, accountId, 'browser_render_seconds');
   }
+  // 无论 KV 还是 D1 模式，都同步持久化到 D1 quota_usage.exhausted，
+  // 使 getQuotaSummary / 前端仪表盘能正确反映耗尽状态
+  await setExhausted(env.DB, accountId, 'browser_render_seconds');
   logger.info('BrowserRL', `account ${accountId} marked exhausted (CF daily limit)`);
 }
 
@@ -171,9 +172,9 @@ export async function clearAccountExhausted(env: Env, accountId: number): Promis
     if (existing) {
       await kvWriteBucket(env, accountId, { ...existing, exhausted: false });
     }
-  } else {
-    await clearExhausted(env.DB, accountId, 'browser_render_seconds');
   }
+  // 同步清除 D1 中的 exhausted 标记，保持 KV 与 D1 一致
+  await clearExhausted(env.DB, accountId, 'browser_render_seconds');
 }
 
 /** 距离下一个 UTC 午夜的毫秒数。 */

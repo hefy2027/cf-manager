@@ -149,6 +149,57 @@
         <n-button type="primary" @click="showBatchResultModal = false">关闭</n-button>
       </template>
     </n-modal>
+
+    <n-modal v-model:show="showCredModal" preset="dialog" title="查看 API 凭证" style="width: 560px; max-width: 95vw">
+      <n-spin :show="credLoading">
+        <n-space vertical :size="12" v-if="credData">
+          <n-alert type="warning" :bordered="false">
+            凭证信息敏感，请勿泄露。每次查看都会记录审计日志。
+          </n-alert>
+          <n-descriptions label-placement="left" bordered :column="1" size="small">
+            <n-descriptions-item label="名称">{{ credData.name }}</n-descriptions-item>
+            <n-descriptions-item label="认证类型">
+              <n-tag size="small" :type="credData.auth_type === 'token' ? 'info' : 'warning'">
+                {{ credData.auth_type === 'token' ? 'API Token' : 'API Key + Email' }}
+              </n-tag>
+            </n-descriptions-item>
+            <n-descriptions-item v-if="credData.auth_type === 'global_key'" label="Email">
+              {{ credData.email || '-' }}
+            </n-descriptions-item>
+            <n-descriptions-item v-if="credData.auth_type === 'token'" label="API Token">
+              <n-input
+                :value="credData.api_token || ''"
+                type="password"
+                show-password-on="click"
+                readonly
+                :style="{ fontFamily: 'monospace' }"
+              />
+            </n-descriptions-item>
+            <n-descriptions-item v-if="credData.auth_type === 'global_key'" label="API Key">
+              <n-input
+                :value="credData.api_key || ''"
+                type="password"
+                show-password-on="click"
+                readonly
+                :style="{ fontFamily: 'monospace' }"
+              />
+            </n-descriptions-item>
+            <n-descriptions-item v-if="credData.password" label="登录密码">
+              <n-input
+                :value="credData.password"
+                type="password"
+                show-password-on="click"
+                readonly
+                :style="{ fontFamily: 'monospace' }"
+              />
+            </n-descriptions-item>
+          </n-descriptions>
+        </n-space>
+      </n-spin>
+      <template #action>
+        <n-button @click="showCredModal = false">关闭</n-button>
+      </template>
+    </n-modal>
   </div>
 </template>
 
@@ -175,6 +226,33 @@ const importResult = ref<{ summary: { total: number; success: number; skipped: n
 const editingAccountId = ref<number | null>(null);
 const editFeatures = ref<string[]>([]);
 const searchInput = ref('');
+
+// 查看 API 凭证
+const showCredModal = ref(false);
+const credLoading = ref(false);
+const credData = ref<{
+  id: number;
+  name: string;
+  auth_type: 'token' | 'global_key';
+  email: string | null;
+  api_token: string | null;
+  api_key: string | null;
+  password: string | null;
+} | null>(null);
+
+async function handleViewCredentials(row: any) {
+  showCredModal.value = true;
+  credLoading.value = true;
+  credData.value = null;
+  try {
+    credData.value = await accountStore.getCredentials(row.id);
+  } catch (e: any) {
+    message.error(`获取凭证失败：${e?.message || e}`);
+    showCredModal.value = false;
+  } finally {
+    credLoading.value = false;
+  }
+}
 
 const importFile = computed<File | null>(() => {
   const item = importFileList.value[0];
@@ -432,6 +510,7 @@ const columns: DataTableColumns<any> = [
       })();
       return h(NSpace, { size: 4 }, {
         default: () => [
+          h(NButton, { size: 'small', type: 'info', ghost: true, onClick: () => handleViewCredentials(row) }, { default: () => '查看Key' }),
           h(NButton, { size: 'small', disabled: row.is_demo, onClick: () => openFeatureEditor(row) }, { default: () => '功能' }),
           h(NButton, { size: 'small', onClick: () => handleTest(row) }, { default: () => '测试' }),
           isExhausted

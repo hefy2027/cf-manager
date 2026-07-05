@@ -90,6 +90,19 @@ export const useAccountStore = defineStore('accounts', () => {
     await fetchAccounts();
   }
 
+  async function getCredentials(id: number) {
+    const { data } = await accountsApi.getCredentials(id);
+    return data as {
+      id: number;
+      name: string;
+      auth_type: 'token' | 'global_key';
+      email: string | null;
+      api_token: string | null;
+      api_key: string | null;
+      password: string | null;
+    };
+  }
+
   async function importCsv(file: File, skipVerify = false) {
     const { data } = await accountsApi.importCsv(file, skipVerify);
     await fetchAccounts();
@@ -101,5 +114,6 @@ export const useAccountStore = defineStore('accounts', () => {
     page, pageSize, filter, search, total, counts,
     fetchAccounts, setPage, setPageSize, setFilter, setSearch,
     createAccount, deleteAccount, testAccount, testBatch, updateFeatures, clearExhausted, importCsv,
+    getCredentials,
   };
 });

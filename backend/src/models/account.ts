@@ -16,6 +16,7 @@ export interface Account {
   enabled_features: string;
   created_at: string;
   updated_at: string;
+  password: string | null;
 }
 
 export interface AccountInput {
@@ -26,6 +27,7 @@ export interface AccountInput {
   email?: string;
   account_id?: string;
   enabled_features?: string;
+  password?: string;
 }
 
 export function hasFeature(account: Account, feature: AccountFeature): boolean {
@@ -103,7 +105,7 @@ export function getAccountById(id: number): Account | undefined {
 export function createAccount(input: AccountInput): number {
   const features = input.enabled_features || ALL_FEATURES.join(',');
   const stmt = getDb().prepare(
-    'INSERT INTO accounts (name, auth_type, api_token, api_key, email, account_id, enabled_features) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO accounts (name, auth_type, api_token, api_key, email, account_id, enabled_features, password) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   );
   const result = stmt.run(
     input.name,
@@ -112,7 +114,8 @@ export function createAccount(input: AccountInput): number {
     input.api_key || null,
     input.email || null,
     input.account_id || null,
-    features
+    features,
+    input.password || null
   );
   return result.lastInsertRowid as number;
 }

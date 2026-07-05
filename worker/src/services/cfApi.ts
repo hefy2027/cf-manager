@@ -1,5 +1,6 @@
 import type { Account } from '../db/models';
 import { decrypt } from './encryption';
+import { logger } from './logger';
 
 export class CfApiError extends Error {
   status: number;
@@ -74,7 +75,9 @@ export async function cfGraphQL(
   }
   const json = await resp.json() as any;
   if (json.errors?.length) {
-    console.error('[GraphQL] Errors:', JSON.stringify(json.errors));
+    const msg = `GraphQL errors for account ${account.id} (${account.name}): ${JSON.stringify(json.errors)}`;
+    logger.error('cfApi', msg);
+    throw new Error(msg);
   }
   return json;
 }

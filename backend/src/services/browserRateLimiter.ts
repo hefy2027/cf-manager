@@ -1,6 +1,7 @@
 import { getActiveAccountsByFeature, Account } from '../models/account';
 import { clearCache } from './accountRouter';
 import { appLogger } from './logger';
+import { setExhausted } from '../models/quotaUsage';
 
 const TOKEN_INTERVAL_MS = 10_000;
 
@@ -30,6 +31,8 @@ function ensureBuckets(): void {
 export function markAccountExhausted(accountId: number): void {
   const bucket = buckets.get(accountId);
   if (bucket) bucket.exhausted = true;
+  // 同步持久化到数据库，使 /quota 接口与前端仪表盘能正确反映耗尽状态
+  setExhausted(accountId, 'browser_render_seconds');
   clearCache();
   appLogger.info(`[BrowserRL] Account ${accountId} marked as exhausted (CF daily limit)`);
 }

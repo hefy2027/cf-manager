@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { config } from './config';
 import { initDb } from './db';
@@ -18,7 +18,7 @@ import externalBrowserRenderRouter from './routes/externalBrowserRender';
 import aiRouter from './routes/ai';
 import { getQuotaSummary, syncUsageFromCloudflare } from './services/quotaTracker';
 import { invalidateAiCache } from './services/accountRouter';
-import { getRecentLogs } from './models/auditLog';
+import { getRecentLogs, queryLogs, getDistinctActions } from './models/auditLog';
 import { initScheduler } from './services/taskScheduler';
 import { initBrowserRateLimiter } from './services/browserRateLimiter';
 import { v1RequestLogger } from './middleware/v1Logger';
@@ -68,7 +68,7 @@ app.use('/api/v1', v1RequestLogger);
 app.use('/api/v1', openaiRouter);
 app.use('/api/v1', v1ErrorHandler); // OpenAI-format error handler (before global errorHandler)
 
-app.get('/api/quota', async (_req, res, next) => {
+app.get('/api/quota', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     await syncUsageFromCloudflare();
     invalidateAiCache();
@@ -76,9 +76,20 @@ app.get('/api/quota', async (_req, res, next) => {
   } catch (err) { next(err); }
 });
 
-app.get('/api/audit-log', (_req, res, next) => {
+app.get('/api/audit-log', (req, res, next) => {
   try {
-    res.json(getRecentLogs(20));
+    const { action, startDate, endDate } = req.query as any;
+    if (action || startDate || endDate) {
+      res.json(queryLogs({ action, startDate, endDate, limit: 500 }));
+    } else {
+      res.json(getRecentLogs(100));
+    }
+  } catch (err) { next(err); }
+});
+
+app.get('/api/audit-log/actions', (_req, res, next) => {
+  try {
+    res.json(getDistinctActions());
   } catch (err) { next(err); }
 });
 
