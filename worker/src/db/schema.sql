@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   account_id      TEXT,
   is_active       INTEGER DEFAULT 1,
   enabled_features TEXT DEFAULT 'ai,workers,browser_render,dns,storage',
+  password        TEXT,
   created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );

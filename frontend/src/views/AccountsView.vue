@@ -158,6 +158,9 @@
           </n-alert>
           <n-descriptions label-placement="left" bordered :column="1" size="small">
             <n-descriptions-item label="名称">{{ credData.name }}</n-descriptions-item>
+            <n-descriptions-item label="Account ID">
+              <n-text :style="{ fontFamily: 'monospace' }">{{ credData.account_id || '-' }}</n-text>
+            </n-descriptions-item>
             <n-descriptions-item label="认证类型">
               <n-tag size="small" :type="credData.auth_type === 'token' ? 'info' : 'warning'">
                 {{ credData.auth_type === 'token' ? 'API Token' : 'API Key + Email' }}
@@ -234,6 +237,7 @@ const credData = ref<{
   id: number;
   name: string;
   auth_type: 'token' | 'global_key';
+  account_id: string | null;
   email: string | null;
   api_token: string | null;
   api_key: string | null;
@@ -510,7 +514,9 @@ const columns: DataTableColumns<any> = [
       })();
       return h(NSpace, { size: 4 }, {
         default: () => [
-          h(NButton, { size: 'small', type: 'info', ghost: true, onClick: () => handleViewCredentials(row) }, { default: () => '查看Key' }),
+          row.is_demo
+            ? null
+            : h(NButton, { size: 'small', type: 'info', ghost: true, onClick: () => handleViewCredentials(row) }, { default: () => '查看Key' }),
           h(NButton, { size: 'small', disabled: row.is_demo, onClick: () => openFeatureEditor(row) }, { default: () => '功能' }),
           h(NButton, { size: 'small', onClick: () => handleTest(row) }, { default: () => '测试' }),
           isExhausted

@@ -92,15 +92,16 @@ export const useAccountStore = defineStore('accounts', () => {
 
   async function getCredentials(id: number) {
     const { data } = await accountsApi.getCredentials(id);
-    return data as {
-      id: number;
-      name: string;
-      auth_type: 'token' | 'global_key';
-      email: string | null;
-      api_token: string | null;
-      api_key: string | null;
-      password: string | null;
-    };
+  return data as {
+    id: number;
+    name: string;
+    auth_type: 'token' | 'global_key';
+    account_id: string | null;
+    email: string | null;
+    api_token: string | null;
+    api_key: string | null;
+    password: string | null;
+  };
   }
 
   async function importCsv(file: File, skipVerify = false) {

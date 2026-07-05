@@ -169,6 +169,10 @@ router.delete('/:id', (req: Request, res: Response, next: NextFunction) => {
 router.get('/:id/credentials', (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = parseInt(req.params.id as string, 10);
+    if (isDemoAccount(id)) {
+      res.status(403).json({ error: { code: 'DEMO_PROTECTED', message: '演示账户不可查看凭证' } });
+      return;
+    }
     const account = getAccountById(id);
     if (!account) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Account not found' } }); return; }
     let api_token: string | null = null;

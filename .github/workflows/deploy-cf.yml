@@ -235,6 +235,7 @@ jobs:
           wrangler pages project create "${{ github.event.inputs.project_name }}" --production-branch main 2>/dev/null || echo "Project already exists, skipping creation"
 
       - name: Configure secrets
+        id: secrets
         run: |
           PROJECT="${{ github.event.inputs.project_name }}"
           DB_NAME="${{ github.event.inputs.d1_database_name }}"
@@ -246,14 +247,29 @@ jobs:
 
           # 从 D1 自动获取所有账户 ID 作为演示模式保护列表
           echo "查询 D1 中的账户列表..."
-          ACCOUNT_IDS=$(wrangler d1 execute "$DB_NAME" --remote --command="SELECT GROUP_CONCAT(id) AS ids FROM accounts" --json 2>&1 || true)
-          DEMO_IDS=$(echo "$ACCOUNT_IDS" | grep -oP '"ids"\s*:\s*"[^"]*"' | grep -oP '(?<="ids":")[^"]*' || echo "")
+          # 注意：不能用 2>&1，否则 wrangler 的警告会污染 JSON；stderr 丢弃即可
+          ACCOUNT_JSON=$(wrangler d1 execute "$DB_NAME" --remote --command="SELECT GROUP_CONCAT(id) AS ids FROM accounts" --json 2>/dev/null || true)
+          echo "D1 查询原始输出: $ACCOUNT_JSON"
+          # 用 node 解析 JSON，兼容空表（ids 为 null）和 wrangler v4 的数组结构
+          DEMO_IDS=$(node -e '
+            const input = process.argv[1] || "";
+            try {
+              const data = JSON.parse(input);
+              // wrangler d1 execute --json 输出为数组，取第一个对象的 ids 字段
+              const row = Array.isArray(data) ? data[0] : data;
+              const ids = row?.results?.[0]?.ids ?? row?.ids ?? null;
+              if (ids !== null && ids !== undefined && String(ids).trim()) console.log(String(ids));
+            } catch (e) {
+              console.error("JSON 解析失败: " + e.message);
+            }
+          ' "$ACCOUNT_JSON" || echo "")
           if [ -n "$DEMO_IDS" ]; then
             echo "保护账户 IDs: $DEMO_IDS"
             echo "$DEMO_IDS" | wrangler pages secret put DEMO_ACCOUNT_IDS --project-name "$PROJECT"
           else
             echo "暂无账户，跳过 DEMO_ACCOUNT_IDS 设置"
           fi
+          echo "demo_ids=$DEMO_IDS" >> $GITHUB_OUTPUT
 
       - name: Deploy to Cloudflare Pages
         id: deploy
@@ -293,4 +309,5 @@ jobs:
           echo "| D1 数据库 | ${{ github.event.inputs.d1_database_name }} (${{ steps.d1.outputs.database_id }}) |" >> $GITHUB_STEP_SUMMARY
           echo "| KV 命名空间 | ${{ github.event.inputs.kv_namespace_name }} (${{ steps.kv.outputs.kv_namespace_id }}) |" >> $GITHUB_STEP_SUMMARY
           echo "| 完全覆盖 | ${{ github.event.inputs.full_wipe }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 演示保护账户 IDs | ${{ steps.secrets.outputs.demo_ids }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 访问地址 | ${{ steps.deploy.outputs.deploy_url }} |" >> $GITHUB_STEP_SUMMARY

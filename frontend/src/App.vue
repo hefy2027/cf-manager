@@ -301,8 +301,10 @@ function toggleTheme() {
 }
 
 .mobile-content {
+  flex: 1;
   padding: 10px;
-  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .page-view {

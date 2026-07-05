@@ -38,6 +38,7 @@ export function initDb(): void {
       resource    TEXT NOT NULL,
       date        DATE NOT NULL,
       count       INTEGER DEFAULT 0,
+      optimistic  INTEGER DEFAULT 0,
       exhausted   INTEGER DEFAULT 0,
       UNIQUE(account_id, resource, date)
     );
@@ -89,6 +90,9 @@ export function initDb(): void {
   const quotaCols = db.prepare("PRAGMA table_info('quota_usage')").all() as { name: string }[];
   if (!quotaCols.find(c => c.name === 'exhausted')) {
     db.exec("ALTER TABLE quota_usage ADD COLUMN exhausted INTEGER DEFAULT 0");
+  }
+  if (!quotaCols.find(c => c.name === 'optimistic')) {
+    db.exec("ALTER TABLE quota_usage ADD COLUMN optimistic INTEGER DEFAULT 0");
   }
 }
 
