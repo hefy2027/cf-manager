@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号 (例如 v1.0.0)，留空则自动递增 patch 版本'
+        description: '版本号 (例如 v1.0.0)；若该 tag 已存在则覆盖对应 Release，留空则从 master 自动递增 patch'
         required: false
         type: string
 
@@ -26,9 +26,23 @@ jobs:
       - name: Determine version
         id: version
         run: |
+          TAG_EXISTS=false
           if [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
+            # 规范化：确保有 v 前缀
+            case "$VERSION" in
+              v*) ;;
+              *) VERSION="v${VERSION}" ;;
+            esac
+            # 检测该 tag 是否已存在
+            if git rev-parse -q --verify "refs/tags/${VERSION}" >/dev/null; then
+              TAG_EXISTS=true
+              echo "输入的 tag ${VERSION} 已存在，将 checkout 到该 tag 覆盖对应 Release"
+            else
+              echo "输入的 tag ${VERSION} 不存在，将从 master 重新打包并创建新 tag"
+            fi
           else
+            # 留空：从最新 tag 自动递增 patch，使用 master 代码打新 tag
             LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
             MAJOR=$(echo "$LATEST_TAG" | sed 's/v//' | cut -d. -f1)
             MINOR=$(echo "$LATEST_TAG" | sed 's/v//' | cut -d. -f2)
@@ -37,7 +51,14 @@ jobs:
             VERSION="v${MAJOR}.${MINOR}.${PATCH}"
           fi
           echo "tag=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag_exists=$TAG_EXISTS" >> $GITHUB_OUTPUT
           echo "Release version: $VERSION"
+
+      - name: Checkout tag if it already exists
+        if: steps.version.outputs.tag_exists == 'true'
+        run: |
+          git checkout "${{ steps.version.outputs.tag }}"
+          echo "已切换到已有 tag: ${{ steps.version.outputs.tag }}"
 
       - name: Install worker dependencies
         working-directory: worker
@@ -100,7 +121,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| 项目 | 内容 |" >> $GITHUB_STEP_SUMMARY
           echo "|------|------|" >> $GITHUB_STEP_SUMMARY
-          echo "| 版本号 | ${{ steps.version.outputs.tag }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 版本号 | ${{ steps.version.outputs.tag }} (${{ steps.version.outputs.tag_exists == 'true' && '覆盖已有 Release' || '新建 Release' }}) |" >> $GITHUB_STEP_SUMMARY
           echo "| Release 地址 | https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }} |" >> $GITHUB_STEP_SUMMARY
           echo "| 附件 | cf-manager.zip (Worker 预编译包) |" >> $GITHUB_STEP_SUMMARY
           echo "| CHANGELOG | ${{ steps.changelog.outputs.has_changelog == 'true' && '✅ 已包含' || '⚠️ 自动生成' }} |" >> $GITHUB_STEP_SUMMARY
