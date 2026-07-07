@@ -10,7 +10,7 @@
 - **流式响应 SSE 心跳机制**：后端和 Worker 端均为流式响应添加 SSE 心跳，防止客户端等待 TTFB 超时断开连接。
 - **演示模式自动检测**：`deploy-cf.yml` 中演示模式账户保护自动从 D1 查询 `demo_account_ids`，不再需要手动输入。
 - **完全覆盖模式自动部署账户**：`full_wipe` 模式下自动插入部署账户并使用 AES-GCM 加密 API Key。
-- **cf-reg 批量注册工具**：新增 `reg/` 目录，提供跨平台安装脚本（`install.sh` / `install.bat`）和注册脚本 `cf-reg.mjs`，支持批量注册 Cloudflare 账户、验证邮箱、提取 API Key，配套 CF Manager 使用。
+- **cf-reg 批量注册工具**（已下线）：新增 `reg/` 目录，提供跨平台安装脚本（`install.sh` / `install.bat`）和注册脚本 `cf-reg.mjs`，支持批量注册 Cloudflare 账户、验证邮箱、提取 API Key；出于安全原因，该功能后续已移除。
 
 ### 🐛 修复
 
