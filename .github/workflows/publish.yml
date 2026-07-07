@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号 (例如 v1.0.0)；若该 tag 已存在则覆盖对应 Release，留空则从 master 自动递增 patch'
+        description: '版本号 (例如 1.0.0)；若该 tag 已存在则覆盖对应 Release，留空则从 master 自动递增 patch'
         required: false
         type: string
 
@@ -29,11 +29,7 @@ jobs:
           TAG_EXISTS=false
           if [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
-            # 规范化：确保有 v 前缀
-            case "$VERSION" in
-              v*) ;;
-              *) VERSION="v${VERSION}" ;;
-            esac
+            # 使用输入原值，不做任何前缀规范化
             # 检测该 tag 是否已存在
             if git rev-parse -q --verify "refs/tags/${VERSION}" >/dev/null; then
               TAG_EXISTS=true
@@ -43,12 +39,12 @@ jobs:
             fi
           else
             # 留空：从最新 tag 自动递增 patch，使用 master 代码打新 tag
-            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-            MAJOR=$(echo "$LATEST_TAG" | sed 's/v//' | cut -d. -f1)
-            MINOR=$(echo "$LATEST_TAG" | sed 's/v//' | cut -d. -f2)
-            PATCH=$(echo "$LATEST_TAG" | sed 's/v//' | cut -d. -f3)
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")
+            MAJOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f1)
+            MINOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f2)
+            PATCH=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f3)
             PATCH=$((PATCH + 1))
-            VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+            VERSION="${MAJOR}.${MINOR}.${PATCH}"
           fi
           echo "tag=$VERSION" >> $GITHUB_OUTPUT
           echo "tag_exists=$TAG_EXISTS" >> $GITHUB_OUTPUT
