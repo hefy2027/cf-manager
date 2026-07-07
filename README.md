@@ -19,7 +19,7 @@
 - 支持 API Token 和 Global API Key 两种认证方式，详见 [账户认证文档](docs/account-auth.md)
 - 多账户统一管理，自动加密存储凭证
 - AI 推理和浏览器渲染支持多账户自动轮换，配额耗尽自动切换
-- 配套 [cf-reg 批量注册工具](reg/README.md)，自动完成注册、验证、提取 API Key
+- 出于安全原因，不再提供 cf-reg 批量注册功能
 
 ### 仪表盘
 - 实时展示各账户今日配额使用量（Workers 请求数、AI 神经元、浏览器渲染时长）
