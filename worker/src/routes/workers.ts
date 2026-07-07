@@ -3,6 +3,7 @@ import type { Env } from '../types';
 import { getAccountById, getActiveAccountsByFeature, addAuditLog } from '../db/models';
 import { cfFetch, cfFetchRaw, cfFetchAll } from '../services/cfApi';
 import { getWorkersUsageToday } from '../services/quotaTracker';
+import { fetchScriptSafely } from '../utils/fetchScriptSafely';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -102,6 +103,7 @@ app.post('/:accountId/workers', async (c) => {
 
   let name: string;
   let scriptContent: string;
+  let scriptUrl: string | null = null; // captured for audit log
 
   if (contentType.includes('multipart/form-data')) {
     const formData = await c.req.formData();
@@ -110,9 +112,12 @@ app.post('/:accountId/workers', async (c) => {
     const file = formData.get('script') as File | null;
     if (!name) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Worker name is required' } }, 400);
     if (url) {
-      const resp = await fetch(url);
-      if (!resp.ok) return c.json({ error: { code: 'FETCH_ERROR', message: `Failed to fetch script: ${resp.status}` } }, 400);
-      scriptContent = await resp.text();
+      scriptUrl = url;
+      try {
+        scriptContent = await fetchScriptSafely(url, c.env);
+      } catch (err: any) {
+        return c.json({ error: { code: 'FETCH_ERROR', message: err.message } }, 400);
+      }
     } else if (file) {
       scriptContent = await file.text();
     } else {
@@ -123,9 +128,12 @@ app.post('/:accountId/workers', async (c) => {
     name = body.name;
     if (!name) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Worker name is required' } }, 400);
     if (body.url) {
-      const resp = await fetch(body.url);
-      if (!resp.ok) return c.json({ error: { code: 'FETCH_ERROR', message: `Failed to fetch script: ${resp.status}` } }, 400);
-      scriptContent = await resp.text();
+      scriptUrl = body.url;
+      try {
+        scriptContent = await fetchScriptSafely(body.url, c.env);
+      } catch (err: any) {
+        return c.json({ error: { code: 'FETCH_ERROR', message: err.message } }, 400);
+      }
     } else if (body.script) {
       scriptContent = body.script;
     } else {
@@ -142,7 +150,13 @@ app.post('/:accountId/workers', async (c) => {
     method: 'PUT', body: form,
   });
   const result = await resp.json();
-  await addAuditLog(c.env.DB, { account_id: account.id, action: 'deploy_worker', target: name, status: 'success' });
+  await addAuditLog(c.env.DB, {
+    account_id: account.id,
+    action: 'deploy_worker',
+    target: name,
+    detail: scriptUrl ? `url=${scriptUrl}` : 'source=upload',
+    status: 'success',
+  });
   return c.json(result, 201);
 });
 
@@ -524,9 +538,11 @@ app.post('/batch-deploy', async (c) => {
   if (!scriptContent && !scriptUrl) return c.json({ error: { code: 'NO_FILE', message: 'Script or URL required' } }, 400);
 
   if (scriptUrl && !scriptContent) {
-    const resp = await fetch(scriptUrl);
-    if (!resp.ok) return c.json({ error: { code: 'FETCH_ERROR', message: `Failed: ${resp.status}` } }, 400);
-    scriptContent = await resp.text();
+    try {
+      scriptContent = await fetchScriptSafely(scriptUrl, c.env);
+    } catch (err: any) {
+      return c.json({ error: { code: 'FETCH_ERROR', message: err.message } }, 400);
+    }
   }
 
   const results = await Promise.all(targets.map(async (t: { accountId: number; workerName: string }) => {
@@ -538,7 +554,13 @@ app.post('/batch-deploy', async (c) => {
       form.append('metadata', new Blob([metadata], { type: 'application/json' }));
       form.append('worker.js', new Blob([scriptContent!], { type: 'application/javascript+module' }), 'worker.js');
       await cfFetchRaw(account, `/accounts/${account.account_id}/workers/scripts/${t.workerName}`, c.env.ENCRYPTION_KEY, { method: 'PUT', body: form });
-      await addAuditLog(c.env.DB, { account_id: account.id, action: 'batch_deploy', target: t.workerName, status: 'success' });
+      await addAuditLog(c.env.DB, {
+        account_id: account.id,
+        action: 'batch_deploy',
+        target: t.workerName,
+        detail: scriptUrl ? `url=${scriptUrl}` : 'source=upload',
+        status: 'success',
+      });
       return { ...t, success: true };
     } catch (err: any) {
       return { ...t, success: false, error: err.message };
