@@ -3,6 +3,7 @@ import { findAccountByDomain, getAllZones } from '../services/accountRouter';
 import { listDnsRecords, createDnsRecord, updateDnsRecord, deleteDnsRecord } from '../services/dnsService';
 import { getZoneSettings, updateProxyStatus } from '../services/zoneService';
 import { createAuditLog } from '../models/auditLog';
+import { isDemoAccountId } from './routeUtils';
 
 const router = Router();
 
@@ -45,6 +46,10 @@ router.delete('/domains/:domain/records/:id', async (req: Request, res: Response
   try {
     const domain = req.params.domain as string;
     const { account, zoneId } = await findAccountByDomain(domain);
+    if (isDemoAccountId(account.id)) {
+      res.status(403).json({ error: { code: 'DEMO_PROTECTED', message: '演示账户不可删除 DNS 记录' } });
+      return;
+    }
     await deleteDnsRecord(account, zoneId, req.params.id as string);
     createAuditLog(account.id, 'delete_dns', domain, `record_id=${req.params.id}`, 'success');
     res.json({ success: true });

@@ -22,6 +22,10 @@
           <n-descriptions-item label="数据库路径">
             <n-text>{{ settings.db_path || '-' }}</n-text>
           </n-descriptions-item>
+          <n-descriptions-item label="版本">
+            <n-text v-if="settings.version">v{{ settings.version }}<n-text v-if="settings.git_commit" depth="3" style="margin-left: 8px; font-size: 12px">{{ settings.git_commit }}</n-text></n-text>
+            <n-tag v-else size="small" type="default">未知</n-tag>
+          </n-descriptions-item>
         </n-descriptions>
       </n-spin>
     </n-card>

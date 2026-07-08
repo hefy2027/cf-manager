@@ -25,6 +25,10 @@ worker/cf-manager.zip
 backend/src/data/
 worker/src/data/
 
+# Ignore generated version files (managed by gen-version script)
+worker/src/version.ts
+backend/src/version.ts
+
 # Ignore AI tool configuration directories
 .codebuddy/
 .cursor/

@@ -23,6 +23,9 @@ fi
 
 source .env
 
+# Inject current git commit SHA into the backend image (best-effort)
+export GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo '')"
+
 if [ -z "${ENCRYPTION_KEY:-}" ] || [ "$ENCRYPTION_KEY" = "your-random-encryption-key-here" ]; then
   err "ENCRYPTION_KEY is not set. Edit .env first."
   exit 1

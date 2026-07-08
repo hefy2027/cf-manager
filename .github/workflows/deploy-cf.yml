@@ -59,6 +59,13 @@ jobs:
         with:
           node-version: '22'
 
+      # 脱敏敏感输入，防止其被打印到日志（workflow_dispatch 输入不会被 GitHub 自动脱敏）
+      - name: Mask sensitive inputs
+        run: |
+          echo "::add-mask::${{ github.event.inputs.cf_api_key }}"
+          echo "::add-mask::${{ github.event.inputs.api_secret }}"
+          echo "::add-mask::${{ github.event.inputs.encryption_key }}"
+
       - name: Install wrangler
         run: npm install -g wrangler
 
@@ -240,9 +247,10 @@ jobs:
           PROJECT="${{ github.event.inputs.project_name }}"
           DB_NAME="${{ github.event.inputs.d1_database_name }}"
 
-          echo "${{ github.event.inputs.encryption_key }}" | wrangler pages secret put ENCRYPTION_KEY --project-name "$PROJECT"
+          # 使用 here-string 传入，避免 echo 把密钥打印到日志
+          wrangler pages secret put ENCRYPTION_KEY --project-name "$PROJECT" <<< "${{ github.event.inputs.encryption_key }}"
           if [ -n "${{ github.event.inputs.api_secret }}" ]; then
-            echo "${{ github.event.inputs.api_secret }}" | wrangler pages secret put API_SECRET --project-name "$PROJECT"
+            wrangler pages secret put API_SECRET --project-name "$PROJECT" <<< "${{ github.event.inputs.api_secret }}"
           fi
 
           # 从 D1 自动获取所有账户 ID 作为演示模式保护列表

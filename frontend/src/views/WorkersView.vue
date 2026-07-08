@@ -533,6 +533,7 @@ import { useWorkerStore } from '../stores/workerStore';
 import { useAccountStore } from '../stores/accountStore';
 import { workersApi } from '../api/workers';
 import { formatCN } from '../utils/dateFormat';
+import { loadDemoAccounts, isDemoAccount } from '../utils/demoAccounts';
 
 const workerStore = useWorkerStore();
 const accountStore = useAccountStore();
@@ -1242,7 +1243,9 @@ const columns = computed<DataTableColumns<any>>(() => {
         ...(row.type === 'worker' ? [
           h(NButton, { size: 'small', onClick: () => handleViewLogs(row) }, { default: () => '日志' }),
         ] : []),
-        h(NButton, { size: 'small', type: 'error', onClick: () => handleDelete(row) }, { default: () => '删除' }),
+        ...(isDemoAccount(row.cfAccountId) ? [] : [
+          h(NButton, { size: 'small', type: 'error', onClick: () => handleDelete(row) }, { default: () => '删除' }),
+        ]),
       ],
     }),
   });
@@ -1256,7 +1259,9 @@ const secretColumns: DataTableColumns<any> = [
   { title: '操作', key: 'actions', width: 140, render: (row) => h(NSpace, { size: 4 }, {
     default: () => [
       h(NButton, { size: 'tiny', onClick: () => handleEditSecret(row) }, { default: () => '编辑' }),
-      h(NButton, { size: 'tiny', type: 'error', onClick: () => handleDeleteSecret(row) }, { default: () => '删除' }),
+      ...(isDemoAccount(settingsAccountId.value) ? [] : [
+        h(NButton, { size: 'tiny', type: 'error', onClick: () => handleDeleteSecret(row) }, { default: () => '删除' }),
+      ]),
     ],
   }) },
 ];
@@ -1271,7 +1276,9 @@ const scheduleColumns: DataTableColumns<any> = [
 const domainColumns: DataTableColumns<any> = [
   { title: '域名', key: 'hostname', minWidth: 120, ellipsis: { tooltip: true } },
   { title: '环境', key: 'environment', width: 100, render: (row) => h(NTag, { size: 'small', type: row.environment === 'production' ? 'success' : 'warning' }, { default: () => row.environment || '-' }) },
-  { title: '操作', key: 'actions', width: 80, render: (row) => h(NButton, { size: 'tiny', type: 'error', onClick: () => handleDeleteDomain(row) }, { default: () => '删除' }) },
+  { title: '操作', key: 'actions', width: 80, render: (row) => isDemoAccount(settingsAccountId.value)
+    ? null
+    : h(NButton, { size: 'tiny', type: 'error', onClick: () => handleDeleteDomain(row) }, { default: () => '删除' }) },
 ];
 
 // Route columns
@@ -1279,7 +1286,9 @@ const routeColumns: DataTableColumns<any> = [
   { title: 'Pattern', key: 'pattern', minWidth: 120, ellipsis: true },
   { title: 'Script', key: 'script', width: 150 },
   { title: 'ID', key: 'id', width: 120, ellipsis: true },
-  { title: '操作', key: 'actions', width: 80, render: (row) => h(NButton, { size: 'tiny', type: 'error', onClick: () => handleDeleteRoute(row) }, { default: () => '删除' }) },
+  { title: '操作', key: 'actions', width: 80, render: (row) => isDemoAccount(settingsAccountId.value)
+    ? null
+    : h(NButton, { size: 'tiny', type: 'error', onClick: () => handleDeleteRoute(row) }, { default: () => '删除' }) },
 ];
 
 // Deployment columns
@@ -1298,7 +1307,9 @@ const pagesDomainColumns: DataTableColumns<any> = [
     render: (row) => h(NSpace, null, {
       default: () => [
         h(NButton, { size: 'tiny', type: 'info', onClick: () => window.open(`https://${row.name}`, '_blank') }, { default: () => '打开' }),
-        h(NButton, { size: 'tiny', type: 'error', onClick: () => handleRemovePagesDomain(row) }, { default: () => '删除' }),
+        ...(isDemoAccount(settingsAccountId.value) ? [] : [
+          h(NButton, { size: 'tiny', type: 'error', onClick: () => handleRemovePagesDomain(row) }, { default: () => '删除' }),
+        ]),
       ]
     })
   },
@@ -1312,7 +1323,9 @@ const pagesEnvColumns: DataTableColumns<any> = [
   { title: '操作', key: 'actions', width: 140, render: (row) => h(NSpace, { size: 4 }, {
     default: () => [
       h(NButton, { size: 'tiny', onClick: () => handleEditPagesEnv(row) }, { default: () => '编辑' }),
-      h(NButton, { size: 'tiny', type: 'error', onClick: () => handleDeletePagesEnv(row) }, { default: () => '删除' }),
+      ...(isDemoAccount(settingsAccountId.value) ? [] : [
+        h(NButton, { size: 'tiny', type: 'error', onClick: () => handleDeletePagesEnv(row) }, { default: () => '删除' }),
+      ]),
     ],
   }) },
 ];
@@ -1327,7 +1340,9 @@ const bindingsColumns: DataTableColumns<any> = [
       ? h(NSpace, { size: 'small', align: 'center' }, { default: () => [h('span', null, resolved.name), h(NTag, { size: 'tiny', type: 'default', style: 'opacity: 0.6' }, { default: () => resolved.id })] })
       : h('span', null, resolved.id);
   }},
-  { title: '操作', key: 'actions', width: 80, render: (row) => h(NButton, { size: 'tiny', type: 'error', onClick: () => handleDeleteBinding(row) }, { default: () => '删除' }) },
+  { title: '操作', key: 'actions', width: 80, render: (row) => isDemoAccount(settingsAccountId.value)
+    ? null
+    : h(NButton, { size: 'tiny', type: 'error', onClick: () => handleDeleteBinding(row) }, { default: () => '删除' }) },
 ];
 
 // Pages deployment columns
@@ -1423,7 +1438,8 @@ async function handleEnvSync() {
   } finally { syncing.value = false; }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await loadDemoAccounts();
   workerStore.fetchWorkers();
   accountStore.fetchAccounts();
   loadUsage();

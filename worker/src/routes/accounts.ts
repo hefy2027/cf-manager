@@ -4,13 +4,9 @@ import { getAllAccounts, getAccountById, getAccountByEmail, nameFromEmail, creat
 import { encrypt } from '../services/encryption';
 import { cfFetch } from '../services/cfApi';
 import { getQuotaSummary } from '../services/quotaTracker';
+import { isDemoAccount } from '../services/demo';
 
 const app = new Hono<{ Bindings: Env }>();
-
-function isDemoAccount(id: number, demoIds: string | undefined): boolean {
-  if (!demoIds) return false;
-  return demoIds.split(',').map(s => parseInt(s.trim(), 10)).includes(id);
-}
 
 app.get('/', async (c) => {
   const db = c.env.DB;

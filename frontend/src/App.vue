@@ -41,9 +41,12 @@
                     <n-button v-if="isAuthenticated" quaternary size="small" @click="handleLogout">退出</n-button>
                   </n-space>
                 </n-layout-header>
-                <n-layout-content content-style="padding: 24px; height: 100%; box-sizing: border-box;" style="height: calc(100vh - 48px); overflow-y: auto">
+                <n-layout-content content-style="padding: 24px; height: 100%; box-sizing: border-box;" style="height: calc(100vh - 48px - 32px); overflow-y: auto">
                   <router-view />
                 </n-layout-content>
+                <n-layout-footer bordered style="height: 32px; display: flex; align-items: center; justify-content: flex-end; padding: 0 16px; font-size: 12px; color: #999">
+                  <span v-if="appVersion">CF Manager v{{ appVersion }}<template v-if="appCommit"> · {{ appCommit }}</template></span>
+                </n-layout-footer>
               </n-layout>
             </n-layout>
 
@@ -51,6 +54,7 @@
             <div v-else class="mobile-layout">
               <div class="mobile-content">
                 <router-view />
+                <div class="app-footer" v-if="appVersion">CF Manager v{{ appVersion }}<template v-if="appCommit"> · {{ appCommit }}</template></div>
               </div>
 
               <!-- FAB Overlay -->
@@ -136,6 +140,13 @@ const showLogin = ref(false);
 const authChecking = ref(true);
 const loginSecret = ref('');
 const loginLoading = ref(false);
+const appVersion = ref('');
+const appCommit = ref('');
+
+function applyVersion(data: any) {
+  appVersion.value = data?.version || '';
+  appCommit.value = data?.git_commit || '';
+}
 
 const isMobile = ref(window.innerWidth <= 768);
 const fabOpen = ref(false);
@@ -220,7 +231,8 @@ onMounted(async () => {
     showLogin.value = true;
   });
   try {
-    await apiClient.get('/settings', { _silent: true });
+    const resp: any = await apiClient.get('/settings', { _silent: true });
+    applyVersion(resp.data);
     showLogin.value = false;
   } catch (err: any) {
     if (err?.response?.status === 401 || err?.response?.status === 403) {
@@ -240,7 +252,8 @@ async function handleLogin() {
   loginLoading.value = true;
   try {
     localStorage.setItem('api_token', loginSecret.value);
-    await apiClient.get('/settings', { _silent: true });
+    const resp: any = await apiClient.get('/settings', { _silent: true });
+    applyVersion(resp.data);
     isAuthenticated.value = true;
     showLogin.value = false;
   } catch {
@@ -307,6 +320,14 @@ function toggleTheme() {
   padding: 10px;
   display: flex;
   flex-direction: column;
+}
+
+.app-footer {
+  margin-top: auto;
+  padding: 12px 4px 4px;
+  text-align: center;
+  font-size: 12px;
+  color: #999;
 }
 
 .page-view {

@@ -3,6 +3,7 @@ import { config } from '../config';
 import { clearCache } from '../services/accountRouter';
 import { clearClientCache } from '../services/cfFactory';
 import { getProxyUrl, setProxyUrl, isProxyEnabled, setProxyEnabled, testProxyConnection } from '../services/proxyService';
+import { VERSION, GIT_COMMIT } from '../version';
 
 const router = Router();
 
@@ -14,6 +15,9 @@ router.get('/', (_req, res) => {
     db_path: config.dbPath,
     proxy_url: getProxyUrl(),
     proxy_enabled: isProxyEnabled(),
+    platform: 'node-backend',
+    version: VERSION,
+    git_commit: GIT_COMMIT,
   });
 });
 

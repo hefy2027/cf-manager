@@ -66,17 +66,24 @@
 </template>
 
 <script setup lang="ts">
-import { ref, h, onMounted } from 'vue';
+import { ref, h, computed, onMounted } from 'vue';
 import { NButton, NSwitch, NTag, NText, useMessage } from 'naive-ui';
 import type { DataTableColumns } from 'naive-ui';
 import { useDnsStore } from '../stores/dnsStore';
 import { dnsApi } from '../api/dns';
+import { loadDemoAccounts, isDemoAccount } from '../utils/demoAccounts';
 
 const dnsStore = useDnsStore();
 const message = useMessage();
 
 const showAddModal = ref(false);
 const adding = ref(false);
+
+// 当前选中的域名所属账户是否为演示（Demo）保护账户：演示账户隐藏删除 DNS 记录按钮
+const currentDomainIsDemo = computed(() => {
+  const d = dnsStore.domains.find((x: any) => (typeof x === 'string' ? x : x.name) === dnsStore.currentDomain);
+  return d ? isDemoAccount(d.cfAccountId) : false;
+});
 
 const typeOptions = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'SRV', 'NS', 'PTR'].map(t => ({ label: t, value: t }));
 
@@ -125,11 +132,14 @@ const recordColumns: DataTableColumns<any> = [
   },
   {
     title: '操作', key: 'actions', width: 80,
-    render: (row) => h(NButton, { size: 'small', type: 'error', onClick: () => handleDeleteRecord(row) }, { default: () => '删除' }),
+    render: (row) => currentDomainIsDemo.value
+      ? null
+      : h(NButton, { size: 'small', type: 'error', onClick: () => handleDeleteRecord(row) }, { default: () => '删除' }),
   },
 ];
 
 onMounted(() => {
+  loadDemoAccounts();
   dnsStore.fetchDomains();
 });
 </script>

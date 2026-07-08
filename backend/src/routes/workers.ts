@@ -4,7 +4,7 @@ import AdmZip from 'adm-zip';
 import { getActiveAccountsByFeature, getAccountById } from '../models/account';
 import { createAuditLog } from '../models/auditLog';
 import { appLogger } from '../services/logger';
-import { getAccountOr404 } from './routeUtils';
+import { getAccountOr404, demoDestructiveGuard } from './routeUtils';
 import {
   listWorkers, listPages, deployWorker, deployWorkerFromUrl, deleteWorker, deletePagesProject, getWorkerLogs, deployPages,
   // Secrets
@@ -35,6 +35,9 @@ import { getAllZones } from '../services/accountRouter';
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1 * 1024 * 1024 } });
 const uploadPages = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024, files: 100 } });
 const router = Router();
+
+// 演示账户：拦截所有销毁/删除类操作（DELETE 等）
+router.use(demoDestructiveGuard);
 
 // ============ List all ============
 router.get('/', async (_req: Request, res: Response, next: NextFunction) => {

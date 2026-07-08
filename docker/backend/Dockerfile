@@ -7,7 +7,14 @@ WORKDIR /app
 COPY backend/package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
 COPY backend/tsconfig.json ./
+COPY scripts/gen-version.js ./scripts/gen-version.js
+COPY CHANGELOG.md ./CHANGELOG.md
 COPY backend/src ./src
+# 版本信息：从 CHANGELOG.md 提取版本号，git commit 通过 build-arg 注入（缺省为空）
+ARG GIT_COMMIT=""
+ENV BACKEND_SRC=/app/src
+ENV GIT_COMMIT=${GIT_COMMIT}
+RUN node scripts/gen-version.js backend
 # model-pricing.json 在 .gitignore 中，需从 shared/ 手动拷贝
 COPY shared/model-pricing.json ./src/data/model-pricing.json
 RUN npx tsc

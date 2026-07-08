@@ -2,8 +2,12 @@ import { Hono } from 'hono';
 import type { Env } from '../types';
 import { getAccountById, addAuditLog } from '../db/models';
 import { cfFetch, cfFetchRaw } from '../services/cfApi';
+import { isDemoAccount, demoDestructiveGuard } from '../services/demo';
 
 const app = new Hono<{ Bindings: Env }>();
+
+// 演示账户：拦截所有销毁/删除类操作（DELETE、bulk-delete）
+app.use('/:accountId/*', demoDestructiveGuard());
 
 async function requireAccount(c: any) {
   const id = parseInt(c.req.param('accountId'), 10);
@@ -143,6 +147,9 @@ app.post('/:accountId/d1/:dbId/query', async (c) => {
   const account = await requireAccount(c);
   const { sql, params } = await c.req.json();
   if (!sql) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'sql is required' } }, 400);
+  if (/^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|REPLACE)\b/i.test(sql) && isDemoAccount(account.id, c.env.DEMO_ACCOUNT_IDS)) {
+    return c.json({ error: { code: 'DEMO_PROTECTED', message: '演示账户的 D1 数据库不可执行写操作（建/删/改）' } }, 403);
+  }
   const data = await cfFetch(account, `${acctPath(account)}/d1/database/${c.req.param('dbId')}/query`, c.env.ENCRYPTION_KEY, {
     method: 'POST', body: JSON.stringify({ sql, params: params || [] }),
   });

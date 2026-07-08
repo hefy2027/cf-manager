@@ -26,6 +26,24 @@ function clean(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+// ---- Version info (from CHANGELOG.md + git) ----
+function getAppVersion() {
+  try {
+    const cl = fs.readFileSync(path.resolve(__dirname, '../CHANGELOG.md'), 'utf-8');
+    const m = cl.match(/^##\s+\[(\d+\.\d+\.\d+)\]/m);
+    if (m) return m[1];
+  } catch {}
+  return '0.0.0';
+}
+function getGitCommit() {
+  try {
+    return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch {}
+  return '';
+}
+const APP_VERSION = getAppVersion();
+const APP_COMMIT = getGitCommit();
+
 const obfuscatorOptions = {
   compact: true,
   controlFlowFlattening: false,
@@ -66,8 +84,11 @@ const frontendDir = path.resolve(__dirname, '../frontend');
 const publicDir = path.resolve(__dirname, 'public');
 const distDir = path.resolve(frontendDir, 'dist');
 
-const totalSteps = 6 + (OBFUSCATE_FRONTEND ? 1 : 0) + (OBFUSCATE_WORKER ? 1 : 0);
+const totalSteps = 7 + (OBFUSCATE_FRONTEND ? 1 : 0) + (OBFUSCATE_WORKER ? 1 : 0);
 let step = 0;
+
+console.log(`[${++step}/${totalSteps}] Generating version info (CHANGELOG.md + git)...`);
+execSync('node ../scripts/gen-version.js', { cwd: __dirname, stdio: 'inherit' });
 
 console.log(`\nObfuscation: frontend=${OBFUSCATE_FRONTEND ? 'ON' : 'OFF'}, worker=${OBFUSCATE_WORKER ? 'ON' : 'OFF'}`);
 console.log(`  Set OBFUSCATE_FRONTEND=true to enable frontend obfuscation`);
@@ -124,6 +145,7 @@ const zipSize = (fs.statSync(zipPath).size / 1024 / 1024).toFixed(2);
 const fileCount = fs.readdirSync(publicDir, { recursive: true }).length;
 
 console.log(`\nBuild complete!`);
+console.log(`  Version: v${APP_VERSION}${APP_COMMIT ? ' (' + APP_COMMIT + ')' : ''}`);
 console.log(`  Output:  worker/public/`);
 console.log(`  Files:   ${fileCount}`);
 console.log(`  Worker:  ${workerSize} KB`);

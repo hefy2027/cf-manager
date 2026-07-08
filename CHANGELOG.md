@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.2.0] - 2026-07-08
+
+### 🚀 新特性
+
+- **版本号标识**：部署时自动从 `CHANGELOG.md` 提取版本号和 git commit SHA，`/api/settings` 接口返回 `version` 和 `git_commit` 字段，管理面板设置页面同步展示版本号，解决线上版本识别问题。
+
+---
+
+## [1.1.2] - 2026-07-07
+
+### 🔒 安全修复
+
+- **SSRF 漏洞修复**：新增 `fetchScriptSafely()` 安全抓取函数，替换 Worker 部署和批量部署中三处裸 `fetch(url)` 调用，修复北邮网安学院报告的服务端请求伪造漏洞。安全函数强制校验：
+  - 协议白名单（仅允许 `https:`）
+  - 主机/IP 校验（拒绝环回、私网、链路本地及唯一本地地址段）
+  - 重定向防护（`redirect: manual`，逐跳校验 Location）
+  - Content-Type 校验（仅接受 JavaScript/文本类型）
+  - 响应大小限制（最大 5 MiB）
+  - 可选 URL 来源白名单（环境变量 `WORKER_DEPLOY_URL_ALLOWLIST`）
+- **认证中间件加固**：当 `API_SECRET` 环境变量未配置时，不再静默跳过认证，而是自动生成密码学随机临时 secret 并在控制台输出明确的安全告警
+- **审计日志增强**：Worker 部署审计日志 `detail` 字段新增来源 URL 记录（`url=...` / `source=upload`），便于事后安全追溯
+
+### 📄 文档
+
+- 新增 `docs/ssrf-fix-plan.md`：SSRF 漏洞详细修复方案文档
+- 新增 `docs/cve-response-email.md`：回复北邮研究者的 CVE 同意邮件稿
+
+### 🙏 致谢
+
+感谢北京邮电大学网络空间安全学院 Liu Huan 和 Zifeng Kang 的负责任漏洞披露。
+
+---
+
 ## [1.1.1] - 2026-07-05
 
 ### 🚀 新特性

@@ -3,8 +3,12 @@ import type { Env } from '../types';
 import { getAccountById, getActiveAccountsByFeature, addAuditLog } from '../db/models';
 import { cfFetch, cfFetchRaw, cfFetchAll } from '../services/cfApi';
 import { getWorkersUsageToday } from '../services/quotaTracker';
+import { demoDestructiveGuard } from '../services/demo';
 
 const app = new Hono<{ Bindings: Env }>();
+
+// 演示账户：拦截所有销毁/删除类操作（DELETE 等）
+app.use('/:accountId/*', demoDestructiveGuard());
 
 async function extractZipFiles(zipData: Uint8Array): Promise<Array<{ path: string; buffer: Uint8Array }>> {
   const files: Array<{ path: string; buffer: Uint8Array }> = [];

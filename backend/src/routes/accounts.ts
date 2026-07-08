@@ -10,18 +10,13 @@ import { getQuotaSummary } from '../services/quotaTracker';
 import { clearCache } from '../services/accountRouter';
 import { appLogger } from '../services/logger';
 import { createAuditLog } from '../models/auditLog';
-import { config } from '../config';
 import { getHttpAgent } from '../services/proxyService';
 import { clearExhausted } from '../models/quotaUsage';
+import { isDemoAccountId } from './routeUtils';
 
 const router = Router();
 
 const uploadCsv = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
-
-function isDemoAccount(id: number): boolean {
-  if (!config.demoAccountIds) return false;
-  return config.demoAccountIds.split(',').map(s => parseInt(s.trim(), 10)).includes(id);
-}
 
 router.get('/', (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -42,7 +37,7 @@ router.get('/', (req: Request, res: Response, next: NextFunction) => {
         ...a,
         api_token: a.api_token ? '***encrypted***' : null,
         api_key: a.api_key ? '***encrypted***' : null,
-        is_demo: isDemoAccount(a.id),
+        is_demo: isDemoAccountId(a.id),
       }));
       res.json({ accounts, quota, total: paged.total, counts: paged.counts });
     } else {
@@ -50,7 +45,7 @@ router.get('/', (req: Request, res: Response, next: NextFunction) => {
         ...a,
         api_token: a.api_token ? '***encrypted***' : null,
         api_key: a.api_key ? '***encrypted***' : null,
-        is_demo: isDemoAccount(a.id),
+        is_demo: isDemoAccountId(a.id),
       }));
       res.json({ accounts, quota });
     }
@@ -132,7 +127,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
 router.patch('/:id/features', (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = parseInt(req.params.id as string, 10);
-    if (isDemoAccount(id)) {
+    if (isDemoAccountId(id)) {
       res.status(403).json({ error: { code: 'DEMO_PROTECTED', message: '演示账户不可修改' } });
       return;
     }
@@ -153,7 +148,7 @@ router.patch('/:id/features', (req: Request, res: Response, next: NextFunction) 
 router.delete('/:id', (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = parseInt(req.params.id as string, 10);
-    if (isDemoAccount(id)) {
+    if (isDemoAccountId(id)) {
       res.status(403).json({ error: { code: 'DEMO_PROTECTED', message: '演示账户不可删除' } });
       return;
     }
@@ -169,7 +164,7 @@ router.delete('/:id', (req: Request, res: Response, next: NextFunction) => {
 router.get('/:id/credentials', (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = parseInt(req.params.id as string, 10);
-    if (isDemoAccount(id)) {
+    if (isDemoAccountId(id)) {
       res.status(403).json({ error: { code: 'DEMO_PROTECTED', message: '演示账户不可查看凭证' } });
       return;
     }
@@ -235,7 +230,7 @@ router.post('/:id/test', async (req: Request, res: Response, next: NextFunction)
 router.post('/:id/clear-exhausted', (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = parseInt(req.params.id as string, 10);
-    if (isDemoAccount(id)) {
+    if (isDemoAccountId(id)) {
       res.status(403).json({ error: { code: 'DEMO_PROTECTED', message: '演示账户不可操作' } });
       return;
     }
@@ -265,7 +260,7 @@ router.post('/test-batch', async (req: Request, res: Response, next: NextFunctio
       targets = targets.filter(a => a.is_active === 0);
     }
     // 跳过演示账户
-    targets = targets.filter(a => !isDemoAccount(a.id));
+    targets = targets.filter(a => !isDemoAccountId(a.id));
 
     const results: Array<{ id: number; name: string; status: 'success' | 'error'; message?: string }> = [];
 

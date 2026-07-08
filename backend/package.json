@@ -1,11 +1,11 @@
 {
   "name": "backend",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "node ../scripts/sync-pricing.js && nodemon --exec ts-node src/index.ts",
-    "build": "node ../scripts/sync-pricing.js && tsc",
+    "dev": "node ../scripts/sync-pricing.js && node ../scripts/gen-version.js backend && nodemon --exec ts-node src/index.ts",
+    "build": "node ../scripts/sync-pricing.js && node ../scripts/gen-version.js backend && tsc",
     "start": "node dist/index.js"
   },
   "keywords": [],

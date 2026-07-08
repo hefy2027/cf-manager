@@ -21,7 +21,7 @@
                     :style="{ background: selectedKvNs?.id === ns.id ? 'rgba(24,160,88,0.1)' : '' }">
                     <div style="display: flex; justify-content: space-between; align-items: center">
                       <span style="cursor: pointer; flex: 1" @click="selectKvNamespace(ns)">{{ ns.title || ns.id }}</span>
-                      <n-button size="tiny" type="error" quaternary @click.stop="handleDeleteKvNs(ns)">×</n-button>
+                      <n-button v-if="!isDemoSelected" size="tiny" type="error" quaternary @click.stop="handleDeleteKvNs(ns)">×</n-button>
                     </div>
                   </n-list-item>
                 </n-list>
@@ -60,7 +60,7 @@
                     :style="{ background: selectedD1Db?.uuid === db.uuid ? 'rgba(24,160,88,0.1)' : '' }">
                     <div style="display: flex; justify-content: space-between; align-items: center">
                       <span style="cursor: pointer; flex: 1" @click="selectD1Database(db)">{{ db.name }}</span>
-                      <n-button size="tiny" type="error" quaternary @click.stop="handleDeleteD1Db(db)">×</n-button>
+                      <n-button v-if="!isDemoSelected" size="tiny" type="error" quaternary @click.stop="handleDeleteD1Db(db)">×</n-button>
                     </div>
                   </n-list-item>
                 </n-list>
@@ -87,7 +87,7 @@
               <n-input v-model:value="d1Sql" type="textarea" :rows="4" placeholder="输入 SQL 查询..." style="margin-bottom: 12px; font-family: monospace;" />
               <n-space>
                 <n-button type="primary" size="small" @click="executeD1" :loading="d1Loading" :disabled="!selectedD1Db || !d1Sql">执行</n-button>
-                <n-checkbox v-model:checked="d1AllowWrite" size="small">允许写操作</n-checkbox>
+                <n-checkbox v-model:checked="d1AllowWrite" size="small" :disabled="isDemoSelected">允许写操作</n-checkbox>
               </n-space>
               <div v-if="d1Result" style="margin-top: 16px">
                 <n-text depth="3" style="font-size: 12px">{{ d1Result.meta?.rows_read || 0 }} 行读取, {{ d1Result.meta?.rows_written || 0 }} 行写入, {{ d1Result.meta?.duration || 0 }}ms</n-text>
@@ -112,7 +112,7 @@
                     :style="{ background: selectedR2Bucket?.name === b.name ? 'rgba(24,160,88,0.1)' : '' }">
                     <div style="display: flex; justify-content: space-between; align-items: center">
                       <span style="cursor: pointer; flex: 1" @click="selectR2Bucket(b)">{{ b.name }}</span>
-                      <n-button size="tiny" type="error" quaternary @click.stop="handleDeleteR2Bucket(b)">×</n-button>
+                      <n-button v-if="!isDemoSelected" size="tiny" type="error" quaternary @click.stop="handleDeleteR2Bucket(b)">×</n-button>
                     </div>
                   </n-list-item>
                 </n-list>
@@ -195,8 +195,8 @@
       <n-space style="margin-top: 16px">
         <n-button size="small" type="primary" @click="showD1AddColumn = true">添加列</n-button>
         <n-button size="small" type="warning" @click="showD1RenameColumn = true" :disabled="!d1SchemaData.length">重命名列</n-button>
-        <n-button size="small" type="error" @click="showD1DropColumn = true" :disabled="!d1SchemaData.length">删除列</n-button>
-        <n-button size="small" type="error" @click="handleD1DropTable">删除此表</n-button>
+        <n-button size="small" type="error" @click="showD1DropColumn = true" :disabled="isDemoSelected || !d1SchemaData.length">删除列</n-button>
+        <n-button size="small" type="error" @click="handleD1DropTable" :disabled="isDemoSelected">删除此表</n-button>
       </n-space>
 
       <!-- Add Column inline -->
@@ -276,6 +276,7 @@ import type { DataTableColumns } from 'naive-ui';
 import { storageApi } from '../api/storage';
 import { accountsApi } from '../api/accounts';
 import { formatCN } from '../utils/dateFormat';
+import { loadDemoAccounts, isDemoAccount } from '../utils/demoAccounts';
 
 const message = useMessage();
 const dialog = useDialog();
@@ -303,6 +304,9 @@ const accountOptions = computed(() =>
     .filter((a: any) => a.is_active && (a.enabled_features || 'ai,workers,browser_render,dns,storage').includes('storage'))
     .map((a: any) => ({ label: a.name, value: a.id }))
 );
+
+// 当前选中的账户是否为演示（Demo）保护账户：演示账户禁用所有删除/写操作按钮
+const isDemoSelected = computed(() => isDemoAccount(selectedAccount.value));
 
 async function checkR2Available() {
   if (!selectedAccount.value) { r2Available.value = true; return; }
@@ -464,7 +468,9 @@ const kvColumns: DataTableColumns<any> = [
     title: '操作', key: 'actions', width: 140,
     render: (row) => h(NSpace, null, { default: () => [
       h(NButton, { size: 'small', onClick: () => viewKvValue(row) }, { default: () => '查看' }),
-      h(NButton, { size: 'small', type: 'error', onClick: () => handleDeleteKv(row) }, { default: () => '删除' }),
+      ...(isDemoSelected.value ? [] : [
+        h(NButton, { size: 'small', type: 'error', onClick: () => handleDeleteKv(row) }, { default: () => '删除' }),
+      ]),
     ]}),
   },
 ];
@@ -897,13 +903,16 @@ const r2Columns: DataTableColumns<any> = [
         btns.push(h(NButton, { size: 'small', type: 'info', onClick: () => handlePreviewR2(row) }, { default: () => '预览' }));
       }
       btns.push(h(NButton, { size: 'small', onClick: () => handleDownloadR2(row) }, { default: () => '下载' }));
-      btns.push(h(NButton, { size: 'small', type: 'error', onClick: () => handleDeleteR2(row) }, { default: () => '删除' }));
+      if (!isDemoSelected.value) {
+        btns.push(h(NButton, { size: 'small', type: 'error', onClick: () => handleDeleteR2(row) }, { default: () => '删除' }));
+      }
       return h(NSpace, { size: 'small' }, { default: () => btns });
     },
   },
 ];
 
 // ============ Init ============
+watch(isDemoSelected, (demo) => { if (demo) d1AllowWrite.value = false; });
 watch(activeTab, (tab) => {
   if (!selectedAccount.value) return;
   if (tab === 'kv' && !kvNamespaces.value.length) loadKvNamespaces();
@@ -913,6 +922,7 @@ watch(activeTab, (tab) => {
 
 onMounted(async () => {
   try {
+    await loadDemoAccounts();
     const { data } = await accountsApi.getAll();
     allAccounts.value = data.accounts || [];
   } catch {

@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { createAuditLog } from '../models/auditLog';
-import { getAccountOr404 } from './routeUtils';
+import { getAccountOr404, demoDestructiveGuard, isDemoAccountId } from './routeUtils';
 import {
   createKvNamespace, deleteKvNamespace, listKvKeys, getKvValue, putKvValue, deleteKvKey, bulkDeleteKvKeys,
   createD1Database, deleteD1Database, listD1Tables, getD1TableSchema, executeD1Query,
@@ -11,6 +11,9 @@ import { listKvNamespaces, listD1Databases, listR2Buckets } from '../services/wo
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 const router = Router();
+
+// 演示账户：拦截所有销毁/删除类操作（DELETE、bulk-delete）
+router.use(demoDestructiveGuard);
 
 function p(req: Request, key: string): string {
   return req.params[key] as string;
@@ -162,7 +165,11 @@ router.post('/:accountId/d1/:dbId/query', async (req: Request, res: Response, ne
     if (!account) return;
     const { sql, allowWrite } = req.body;
     if (!sql) { res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'sql is required' } }); return; }
-    const isWrite = /^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)\b/i.test(sql);
+    const isWrite = /^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|REPLACE)\b/i.test(sql);
+    if (isWrite && isDemoAccountId(account.id)) {
+      res.status(403).json({ error: { code: 'DEMO_PROTECTED', message: '演示账户的 D1 数据库不可执行写操作（建/删/改）' } });
+      return;
+    }
     if (isWrite && !allowWrite) {
       res.status(400).json({ error: { code: 'WRITE_NOT_ALLOWED', message: 'Write query requires allowWrite: true' } });
       return;
