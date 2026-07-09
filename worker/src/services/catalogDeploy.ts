@@ -78,8 +78,16 @@ async function resolveBinding(
   }
 
   if (binding.type === 'var') {
-    // Secret / plain var — value comes from user input
-    return { type: 'var', name: binding.name, cfBinding: { type: 'secret_text', name: binding.name, text: '' }, created: false };
+    // secret !== false → 加密 secret_text；secret === false → 明文 plain_text
+    const isSecret = binding.secret !== false;
+    return {
+      type: 'var',
+      name: binding.name,
+      cfBinding: isSecret
+        ? { type: 'secret_text', name: binding.name, text: '' }
+        : { type: 'plain_text', name: binding.name, text: '' },
+      created: false,
+    };
   }
 
   if (binding.type === 'kv') {
@@ -208,7 +216,7 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
       // Fill in secret values for var bindings
       if (binding.type === 'var' && binding.action === 'prompt') {
         const val = secretValues[binding.name];
-        if (binding.required && !val) throw new Error(`必填密钥 ${binding.name} 未填写`);
+        if (binding.required && !val) throw new Error(`必填项 ${binding.name} 未填写`);
         resolved.cfBinding.text = val || '';
       }
       resolvedBindings.push(resolved);
@@ -256,6 +264,7 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
           if (rb.type === 'kv') deploymentConfigs.production.kv_namespaces.push(rb.cfBinding);
           if (rb.type === 'd1') deploymentConfigs.production.d1_databases.push(rb.cfBinding);
           if (rb.type === 'r2') deploymentConfigs.production.r2_buckets.push(rb.cfBinding);
+          if (rb.type === 'var') deploymentConfigs.production.env_vars[rb.name] = { value: rb.cfBinding.text, type: rb.cfBinding.type };
         }
         await cfFetch(account, `/accounts/${account.account_id}/pages/projects/${name}`, encryptionKey, {
           method: 'PATCH', body: JSON.stringify({ deployment_configs: deploymentConfigs }),

@@ -45,6 +45,7 @@
         "title": { "type": "string" },
         "action": { "enum": ["create-or-reuse", "prompt"] },
         "required": { "type": "boolean" },
+        "secret": { "type": "boolean", "description": "仅对 type:var 生效。true/缺省=作为加密 secret 写入（secret_text，前端显示密码框）；false=作为明文环境变量写入（plain_text，前端显示普通文本框）。" },
         "initSqlUrl": { "type": "string", "format": "uri" },
         "initSql": { "type": "string" }
       },

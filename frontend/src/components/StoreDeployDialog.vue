@@ -47,11 +47,19 @@
           </n-form-item>
         </template>
 
-        <!-- Secrets (var/prompt) -->
+        <!-- Secrets (var/prompt, secret !== false) -->
         <template v-if="secretBindings.length">
           <n-divider>需要填写的密钥</n-divider>
           <n-form-item v-for="b in secretBindings" :key="b.name" :label="b.name" :required="b.required">
             <n-input v-model:value="secretValues[b.name]" type="password" show-password-on="click" :placeholder="`输入 ${b.name}`" />
+          </n-form-item>
+        </template>
+
+        <!-- Plain config (var/prompt, secret === false) -->
+        <template v-if="plainBindings.length">
+          <n-divider>需要填写的配置项</n-divider>
+          <n-form-item v-for="b in plainBindings" :key="b.name" :label="b.name" :required="b.required">
+            <n-input v-model:value="secretValues[b.name]" :placeholder="`输入 ${b.name}`" />
           </n-form-item>
         </template>
 
@@ -106,12 +114,17 @@ const resourceBindings = computed(() =>
 );
 
 const secretBindings = computed(() =>
-  (props.template?.bindings || []).filter((b: any) => b.type === 'var' && b.action === 'prompt')
+  (props.template?.bindings || []).filter((b: any) => b.type === 'var' && b.action === 'prompt' && b.secret !== false)
+);
+
+// 明文 var（需手填但作为普通环境变量写入，前端显示普通文本框）
+const plainBindings = computed(() =>
+  (props.template?.bindings || []).filter((b: any) => b.type === 'var' && b.action === 'prompt' && b.secret === false)
 );
 
 const canDeploy = computed(() => {
   if (!form.value.accountId || !form.value.name) return false;
-  for (const b of secretBindings.value) {
+  for (const b of [...secretBindings.value, ...plainBindings.value]) {
     if (b.required && !secretValues.value[b.name]) return false;
   }
   return true;

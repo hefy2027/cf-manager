@@ -69,7 +69,16 @@ async function resolveBinding(
   }
 
   if (binding.type === 'var') {
-    return { type: 'var', name: binding.name, cfBinding: { type: 'secret_text', name: binding.name, text: '' }, created: false };
+    // secret !== false → 加密 secret_text；secret === false → 明文 plain_text
+    const isSecret = binding.secret !== false;
+    return {
+      type: 'var',
+      name: binding.name,
+      cfBinding: isSecret
+        ? { type: 'secret_text', name: binding.name, text: '' }
+        : { type: 'plain_text', name: binding.name, text: '' },
+      created: false,
+    };
   }
 
   if (binding.type === 'kv') {
@@ -141,7 +150,9 @@ async function executeInitSql(account: Account, dbId: string, binding: CatalogBi
   await cf.d1.database.query(dbId, { account_id: account.account_id!, sql });
 }
 
-async function rollback(account: Account, bindings: ResolvedBinding[], workerName?: string): Promise<string[]> {
+async function rollback(
+  account: Account, bindings: ResolvedBinding[], workerName?: string, deleteWorker: boolean = true,
+): Promise<string[]> {
   const errors: string[] = [];
   const cf = getCfClient(account);
   const accountId = account.account_id!;
@@ -155,7 +166,8 @@ async function rollback(account: Account, bindings: ResolvedBinding[], workerNam
       errors.push(`${b.resourceType}:${b.resourceId} - ${e.message}`);
     }
   }
-  if (workerName) {
+  // 仅当 Worker 本身未成功部署时才删除；hybrid 模板若只是 Pages 环节失败，已部署的 Worker 应保留
+  if (workerName && deleteWorker) {
     try { await cf.workers.scripts.delete(workerName, { account_id: accountId }); } catch {}
   }
   return errors;
@@ -231,8 +243,8 @@ async function deployPagesArtifact(
         // secret_text → env_vars
         if (!prodConfigs.env_vars) prodConfigs.env_vars = {};
         if (!previewConfigs.env_vars) previewConfigs.env_vars = {};
-        prodConfigs.env_vars[b.name] = { value: b.text };
-        previewConfigs.env_vars[b.name] = { value: b.text };
+        prodConfigs.env_vars[b.name] = { value: b.text, type: b.type };
+        previewConfigs.env_vars[b.name] = { value: b.text, type: b.type };
         break;
       }
       case 'ai': {
@@ -297,14 +309,16 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
       const resolved = await resolveBinding(account, binding, selection, template.id);
       if (binding.type === 'var' && binding.action === 'prompt') {
         const val = secretValues[binding.name];
-        if (binding.required && !val) throw new Error(`必填密钥 ${binding.name} 未填写`);
+        if (binding.required && !val) throw new Error(`必填项 ${binding.name} 未填写`);
         resolved.cfBinding.text = val || '';
       }
       resolvedBindings.push(resolved);
     }
 
-    const accountId = account.account_id!;
-    const cf = getCfClient(account);
+  const accountId = account.account_id!;
+  const cf = getCfClient(account);
+  let workerDeployed = false;
+  let pagesDeployed = false;
 
     // Step 3: Deploy worker
     if (doWorker) {
@@ -319,6 +333,7 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
       });
       urls.push(accountSubdomain ? `https://${name}.${accountSubdomain}.workers.dev` : `https://${name}.workers.dev`);
       appLogger.info(`[Store] Worker deployed: ${name}`);
+      workerDeployed = true;
     }
 
     // Step 4: Deploy pages
@@ -329,6 +344,7 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
       const pagesSubdomain = await deployPagesArtifact(account, accountId, name, content, template, resolvedBindings);
       urls.push(`https://${pagesSubdomain}`);
       appLogger.info(`[Store] Pages deployed: ${name} → ${pagesSubdomain}`);
+      pagesDeployed = true;
     }
 
     // Step 5: Routes (soft failure)
@@ -352,7 +368,9 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
     return { success: true, warnings, bindings: resolvedBindings, url };
 
   } catch (e: any) {
-    const rollbackErrors = await rollback(account, resolvedBindings, name);
+    appLogger.error(`[Store] Deploy failed for ${name} (${template.id}): ${e.message}`);
+    // 仅回滚本轮未成功部署的部分：已部署的 Worker/Pages 不删，避免 hybrid 一处失败连坐删除成功部分
+    const rollbackErrors = await rollback(account, resolvedBindings, name, !workerDeployed);
     createAuditLog(account.id!, 'store_deploy', name, `error: ${e.message}`, 'error');
     return {
       success: false, error: e.message, warnings, bindings: resolvedBindings,
