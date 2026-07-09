@@ -248,7 +248,7 @@ app.get('/init', async (c) => {
 
 app.post('/deploy', async (c) => {
   const body = await c.req.json();
-  const { accountId, templateId, name, bindingSelections, secretValues } = body;
+  const { accountId, templateId, name, bindingSelections, secretValues, deployType } = body;
 
   if (!accountId || !templateId || !name) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'accountId, templateId, name are required' } }, 400);
@@ -272,6 +272,7 @@ app.post('/deploy', async (c) => {
   const result = await deployTemplate({
     account, encryptionKey: c.env.ENCRYPTION_KEY, template, name,
     bindingSelections: bindingSelections || {}, secretValues: secretValues || {},
+    deployType: deployType || undefined,
     db: c.env.DB,
   });
 

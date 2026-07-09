@@ -50,9 +50,12 @@ jobs:
     runs-on: ubuntu-latest
     # 非交互 CI 下，wrangler 必须通过环境变量认证。
     # 输入的是 Cloudflare Global API Key，对应 wrangler 的 legacy 变量 CLOUDFLARE_API_KEY + CLOUDFLARE_EMAIL。
+    # 将敏感输入提升为 job 级环境变量，后续步骤一律用 $VAR 引用，避免明文出现在回显的脚本里。
     env:
       CLOUDFLARE_API_KEY: ${{ github.event.inputs.cf_api_key }}
       CLOUDFLARE_EMAIL: ${{ github.event.inputs.cf_email }}
+      ENCRYPTION_KEY: ${{ github.event.inputs.encryption_key }}
+      API_SECRET: ${{ github.event.inputs.api_secret }}
     steps:
       - uses: actions/checkout@v5
 
@@ -62,6 +65,14 @@ jobs:
 
       - name: Install wrangler
         run: npm install -g wrangler
+
+      - name: Mask sensitive values in logs
+        # 注册日志脱敏：后续任何步骤即使意外回显这些变量也会被掩码
+        run: |
+          echo "::add-mask::$CLOUDFLARE_API_KEY"
+          echo "::add-mask::$CLOUDFLARE_EMAIL"
+          echo "::add-mask::$ENCRYPTION_KEY"
+          echo "::add-mask::$API_SECRET"
 
       - name: Setup D1 database
         id: d1
@@ -123,9 +134,9 @@ jobs:
         if: ${{ github.event.inputs.full_wipe == 'true' }}
         run: |
           DB_NAME="${{ github.event.inputs.d1_database_name }}"
-          API_KEY="${{ github.event.inputs.cf_api_key }}"
-          API_EMAIL="${{ github.event.inputs.cf_email }}"
-          ENC_KEY="${{ github.event.inputs.encryption_key }}"
+          API_KEY="$CLOUDFLARE_API_KEY"
+          API_EMAIL="$CLOUDFLARE_EMAIL"
+          ENC_KEY="$ENCRYPTION_KEY"
 
           # 获取 Account ID
           ACCOUNT_ID=$(wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1 || echo "")
@@ -241,10 +252,10 @@ jobs:
           PROJECT="${{ github.event.inputs.project_name }}"
           DB_NAME="${{ github.event.inputs.d1_database_name }}"
 
-          # 使用 here-string 传入，避免 echo 把密钥打印到日志
-          wrangler pages secret put ENCRYPTION_KEY --project-name "$PROJECT" <<< "${{ github.event.inputs.encryption_key }}"
-          if [ -n "${{ github.event.inputs.api_secret }}" ]; then
-            wrangler pages secret put API_SECRET --project-name "$PROJECT" <<< "${{ github.event.inputs.api_secret }}"
+          # 使用 here-string 传入，并用 $VAR 引用 job 环境变量，避免明文出现在回显的脚本里
+          wrangler pages secret put ENCRYPTION_KEY --project-name "$PROJECT" <<< "$ENCRYPTION_KEY"
+          if [ -n "$API_SECRET" ]; then
+            wrangler pages secret put API_SECRET --project-name "$PROJECT" <<< "$API_SECRET"
           fi
 
           # 从 D1 自动获取所有账户 ID 作为演示模式保护列表
@@ -285,10 +296,11 @@ jobs:
           # 通过 CF API 查询项目的实际 subdomain（CF 可能会在项目名后追加 -xx 后缀）
           if [ -n "$ACCOUNT_ID" ]; then
             PROJECT_DETAILS=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/pages/projects/${{ github.event.inputs.project_name }}" \
-              -H "X-Auth-Email: ${{ github.event.inputs.cf_email }}" \
-              -H "X-Auth-Key: ${{ github.event.inputs.cf_api_key }}")
+              -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
+              -H "X-Auth-Key: $CLOUDFLARE_API_KEY")
             echo "Project API response: $PROJECT_DETAILS"
-            PROJECT_SUBDOMAIN=$(echo "$PROJECT_DETAILS" | grep -oP '"subdomain"\s*:\s*"[^"]*"' | grep -oP '(?<="subdomain":")[^"]*' || echo "")
+            # 用 jq 稳健解析 subdomain（ubuntu-latest 自带 jq）
+            PROJECT_SUBDOMAIN=$(echo "$PROJECT_DETAILS" | jq -r '.result.subdomain // empty')
           fi
 
           if [ -z "$PROJECT_SUBDOMAIN" ]; then

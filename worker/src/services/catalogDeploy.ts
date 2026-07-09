@@ -257,9 +257,13 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
       form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
       form.append('worker.js', new Blob([content], { type: 'application/javascript+module' }), 'worker.js');
 
-      await cfFetchRaw(account, `/accounts/${account.account_id}/workers/scripts/${name}`, encryptionKey, {
+      const workerResp = await cfFetchRaw(account, `/accounts/${account.account_id}/workers/scripts/${name}`, encryptionKey, {
         method: 'PUT', body: form,
       });
+      if (!workerResp.ok) {
+        const errBody = await workerResp.text();
+        throw new Error(`Worker 部署失败 (${workerResp.status}): ${errBody}`);
+      }
 
       const sub = await getWorkerSubdomain(account, encryptionKey);
       urls.push(sub ? `https://${name}.${sub}.workers.dev` : `https://${name}.workers.dev`);
