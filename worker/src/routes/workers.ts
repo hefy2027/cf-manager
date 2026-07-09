@@ -69,10 +69,8 @@ app.post('/:accountId/workers', async (c) => {
       const resp = await fetch(body.url);
       if (!resp.ok) return c.json({ error: { code: 'FETCH_ERROR', message: `Failed to fetch script: ${resp.status}` } }, 400);
       scriptContent = await resp.text();
-    } else if (body.script) {
-      scriptContent = body.script;
     } else {
-      return c.json({ error: { code: 'NO_FILE', message: 'Script content or URL is required' } }, 400);
+      return c.json({ error: { code: 'NO_FILE', message: 'Script URL is required' } }, 400);
     }
   }
 
@@ -85,6 +83,16 @@ app.post('/:accountId/workers', async (c) => {
     method: 'PUT', body: form,
   });
   const result = await resp.json();
+
+  // Enable workers.dev subdomain so the Worker is accessible immediately (matches backend behavior)
+  try {
+    await cfFetch(account, `/accounts/${account.account_id}/workers/scripts/${name}/subdomain`, c.env.ENCRYPTION_KEY, {
+      method: 'POST', body: JSON.stringify({ enabled: true, previews_enabled: true }),
+    });
+  } catch (_) {
+    // Soft fail: user can still enable manually from settings drawer
+  }
+
   await addAuditLog(c.env.DB, { account_id: account.id, action: 'deploy_worker', target: name, status: 'success' });
   return c.json(result, 201);
 });
@@ -314,8 +322,8 @@ app.get('/:accountId/resources/r2', async (c) => {
     const data = await cfFetch<{ result: any }>(account, `/accounts/${account.account_id}/r2/buckets`, c.env.ENCRYPTION_KEY);
     return c.json(data.result?.buckets || []);
   } catch (e: any) {
-    if (e.body?.includes('10042') || e.body?.includes('enable R2')) {
-      return c.json({ success: false, error: { code: 'R2_NOT_ENABLED', message: 'R2 is not enabled for this account' } }, 403);
+    if (e.body?.includes('10042') || e.body?.includes('enable R2') || e.body?.includes('Please enable R2')) {
+      return c.json({ r2_not_enabled: true, buckets: [] });
     }
     throw e;
   }
@@ -449,6 +457,16 @@ app.post('/batch-deploy', async (c) => {
       form.append('metadata', new Blob([metadata], { type: 'application/json' }));
       form.append('worker.js', new Blob([scriptContent!], { type: 'application/javascript+module' }), 'worker.js');
       await cfFetchRaw(account, `/accounts/${account.account_id}/workers/scripts/${t.workerName}`, c.env.ENCRYPTION_KEY, { method: 'PUT', body: form });
+
+      // Enable workers.dev subdomain so the Worker is accessible immediately (matches backend behavior)
+      try {
+        await cfFetch(account, `/accounts/${account.account_id}/workers/scripts/${t.workerName}/subdomain`, c.env.ENCRYPTION_KEY, {
+          method: 'POST', body: JSON.stringify({ enabled: true, previews_enabled: true }),
+        });
+      } catch (_) {
+        // Soft fail: user can still enable manually from settings drawer
+      }
+
       await addAuditLog(c.env.DB, { account_id: account.id, action: 'batch_deploy', target: t.workerName, status: 'success' });
       return { ...t, success: true };
     } catch (err: any) {

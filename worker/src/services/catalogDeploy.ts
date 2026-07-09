@@ -265,6 +265,15 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
         throw new Error(`Worker 部署失败 (${workerResp.status}): ${errBody}`);
       }
 
+      // Enable workers.dev subdomain so the Worker is accessible immediately (matches backend deployWorker behavior)
+      try {
+        await cfFetch(account, `/accounts/${account.account_id}/workers/scripts/${name}/subdomain`, encryptionKey, {
+          method: 'POST', body: JSON.stringify({ enabled: true, previews_enabled: true }),
+        });
+      } catch (_) {
+        // Soft fail: user can still enable manually from settings drawer
+      }
+
       const sub = await getWorkerSubdomain(account, encryptionKey);
       urls.push(sub ? `https://${name}.${sub}.workers.dev` : `https://${name}.workers.dev`);
       workerDeployed = true;

@@ -55,7 +55,7 @@ router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
         appLogger.error(`[Workers] Failed to list workers for ${account.name}: ${workers.reason}`);
       }
       if (pages.status === 'fulfilled') {
-        items.push(...pages.value.map(p => ({ ...p, type: 'pages', cfAccountId: account.id, accountName: account.name })));
+        items.push(...pages.value.map(p => ({ ...p, name: p.name ?? p.id, type: 'pages', cfAccountId: account.id, accountName: account.name })));
       } else {
         appLogger.error(`[Pages] Failed to list pages for ${account.name}: ${pages.reason}`);
       }
