@@ -214,7 +214,9 @@ function onDeployed(result: any) {
   if (data.error) {
     message.error(`部署失败: ${data.error}`);
     if (data.rolledBack) message.warning('已自动回滚');
-  } else if (data.url) {
+    return; // 报错时保留弹窗，方便查看原因并重新部署
+  }
+  if (data.url) {
     message.success(`部署成功！访问: ${data.url}`);
   } else {
     message.success('部署成功！请在 CF Dashboard 查看');

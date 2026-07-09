@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       cf_api_key:
-        description: 'Cloudflare Global API Key'
+        description: 'Cloudflare Global API Key（仅在本脚本内使用，绝不打印到日志）'
         required: true
         type: string
       cf_email:
-        description: 'Cloudflare 账号邮箱'
+        description: 'Cloudflare 账号邮箱（仅在本脚本内使用，绝不打印到日志）'
         required: true
         type: string
       project_name:
@@ -45,10 +45,6 @@ on:
 permissions:
   contents: read
 
-env:
-  CLOUDFLARE_API_KEY: ${{ github.event.inputs.cf_api_key }}
-  CLOUDFLARE_EMAIL: ${{ github.event.inputs.cf_email }}
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -58,13 +54,6 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
-
-      # 脱敏敏感输入，防止其被打印到日志（workflow_dispatch 输入不会被 GitHub 自动脱敏）
-      - name: Mask sensitive inputs
-        run: |
-          echo "::add-mask::${{ github.event.inputs.cf_api_key }}"
-          echo "::add-mask::${{ github.event.inputs.api_secret }}"
-          echo "::add-mask::${{ github.event.inputs.encryption_key }}"
 
       - name: Install wrangler
         run: npm install -g wrangler
@@ -311,7 +300,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| 配置项 | 值 |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-----|" >> $GITHUB_STEP_SUMMARY
-          echo "| CF 邮箱 | ${{ github.event.inputs.cf_email }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| CF 邮箱 | (出于安全不显示) |" >> $GITHUB_STEP_SUMMARY
           echo "| CF API Key | **** (已隐藏) |" >> $GITHUB_STEP_SUMMARY
           echo "| Pages 项目 | ${{ github.event.inputs.project_name }} |" >> $GITHUB_STEP_SUMMARY
           echo "| D1 数据库 | ${{ github.event.inputs.d1_database_name }} (${{ steps.d1.outputs.database_id }}) |" >> $GITHUB_STEP_SUMMARY
