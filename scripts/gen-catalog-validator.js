@@ -38,7 +38,14 @@ const addFormats = req('ajv-formats');
 const addErrors = req('ajv-errors');
 const standaloneCode = req('ajv/dist/standalone');
 
-const schemaPath = path.join(root, 'shared', 'catalog.schema.json');
+// schema 默认从 <root>/shared/catalog.schema.json 读取；Docker 构建时 backend 已把
+// schema 拷到 /app/src/services/catalog.schema.json，可用 CATALOG_SCHEMA_PATH 指定。
+const schemaPath =
+  process.env.CATALOG_SCHEMA_PATH || path.join(root, 'shared', 'catalog.schema.json');
+if (!fs.existsSync(schemaPath)) {
+  console.error('[gen-catalog-validator] ERROR: schema not found at ' + schemaPath);
+  process.exit(1);
+}
 const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf-8'));
 
 const ajv = new Ajv2020({ allErrors: true, strict: false, code: { source: true } });

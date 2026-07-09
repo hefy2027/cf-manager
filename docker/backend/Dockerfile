@@ -24,7 +24,9 @@ COPY shared/catalog.schema.json ./src/services/catalog.schema.json
 COPY shared/catalogValidator.ts ./src/services/catalogValidator.ts
 # catalog 校验器由 ajv standalone 预编译生成（运行时避免 new Function，兼容 Cloudflare）。
 COPY scripts/gen-catalog-validator.js ./scripts/gen-catalog-validator.js
-RUN CATALOG_VALIDATOR_OUT=/app/src/services/catalogValidate.generated.ts node scripts/gen-catalog-validator.js
+RUN CATALOG_SCHEMA_PATH=/app/src/services/catalog.schema.json \
+    CATALOG_VALIDATOR_OUT=/app/src/services/catalogValidate.generated.ts \
+    node scripts/gen-catalog-validator.js
 RUN npx tsc
 # Prune dev deps in builder so production just copies clean node_modules
 RUN npm prune --omit=dev
