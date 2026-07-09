@@ -5,7 +5,9 @@ RUN --mount=type=cache,target=/var/cache/apk apk add --no-cache python3 make g++
 
 WORKDIR /app
 COPY backend/package*.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci
+# 使用 npm install 而非 npm ci：lock 在 macOS 生成、Docker 为 Linux，
+# better-sqlite3 等平台专属可选原生依赖（如 @emnapi/core）版本不一致会导致 npm ci 严格校验失败。
+RUN --mount=type=cache,target=/root/.npm npm install
 COPY backend/tsconfig.json ./
 COPY scripts/gen-version.js ./scripts/gen-version.js
 COPY CHANGELOG.md ./CHANGELOG.md

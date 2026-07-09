@@ -6,7 +6,9 @@ ARG BASE_URL=/
 ENV VITE_BASE_URL=${BASE_URL}
 
 COPY frontend/package*.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci
+# 使用 npm install 而非 npm ci：lock 在 macOS 生成、Docker 为 Linux，
+# 平台专属可选原生依赖（如 @emnapi/core）版本不一致会导致 npm ci 严格校验失败。
+RUN --mount=type=cache,target=/root/.npm npm install
 COPY frontend/tsconfig*.json frontend/vite.config.ts frontend/index.html ./
 COPY frontend/public ./public
 COPY frontend/src ./src
