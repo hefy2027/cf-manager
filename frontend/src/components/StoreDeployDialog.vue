@@ -31,7 +31,7 @@
                 :options="getResourceOptions(b)"
                 :loading="resourceLoading[b.type]"
                 placeholder="选择资源"
-                @update:value="(val) => onBindingSelect(b, val)"
+                @update:value="(val: string) => onBindingSelect(b, val)"
               />
               <!-- D1 init SQL checkbox -->
               <n-checkbox
@@ -79,7 +79,6 @@ import { ref, computed, watch } from 'vue';
 import { storeApi } from '../api/store';
 import { workersApi } from '../api/workers';
 import { accountsApi } from '../api/accounts';
-import { message } from '../utils/discreteApi';
 
 const props = defineProps<{ show: boolean; template: any }>();
 const emit = defineEmits<{ 'update:show': [boolean]; deployed: [any] }>();
