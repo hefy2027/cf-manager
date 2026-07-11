@@ -20,8 +20,16 @@ async function requireAccount(c: any) {
 }
 
 // ============ List all ============
+// 支持 ?accountId= 仅返回该账户的 Worker/Pages（按需加载）；不带参数返回全部（批量部署/环境同步用）
 app.get('/', async (c) => {
-  const accounts = await getActiveAccountsByFeature(c.env.DB, 'workers');
+  const accountIdQ = c.req.query('accountId');
+  let accounts;
+  if (accountIdQ) {
+    const acc = await getAccountById(c.env.DB, parseInt(accountIdQ, 10));
+    accounts = acc ? [acc] : [];
+  } else {
+    accounts = await getActiveAccountsByFeature(c.env.DB, 'workers');
+  }
   const results = await Promise.all(accounts.map(async (account) => {
     const items: any[] = [];
     const [workersRes, pagesRes] = await Promise.allSettled([
@@ -255,11 +263,52 @@ app.delete('/:accountId/workers/:name/routes/:routeId', async (c) => {
 });
 
 // ============ Script Content ============
+// CF 返回的是 multipart/form-data，源码在 worker.js 字段里。
+// 自写解析器：按 boundary 切分，找出 name="worker.js" 的 part。
 app.get('/:accountId/workers/:name/content', async (c) => {
   const account = await requireAccount(c);
   const resp = await cfFetchRaw(account, `/accounts/${account.account_id}/workers/scripts/${c.req.param('name')}`, c.env.ENCRYPTION_KEY);
-  const text = await resp.text();
-  return c.text(text);
+  if (!resp.ok) {
+    return c.text(`Failed to fetch script content: ${resp.status}`, resp.status as any);
+  }
+  const contentType = resp.headers.get('content-type') || '';
+  const buf = new Uint8Array(await resp.arrayBuffer());
+  if (!/multipart\/form-data/i.test(contentType)) {
+    return c.text(new TextDecoder().decode(buf));
+  }
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  const boundary = boundaryMatch?.[1] || boundaryMatch?.[2];
+  if (!boundary) return c.text(new TextDecoder().decode(buf));
+  const delim = new TextEncoder().encode(`--${boundary}`);
+  const findIndex = (hay: Uint8Array, needle: Uint8Array, from = 0): number => {
+    outer: for (let i = from; i <= hay.length - needle.length; i++) {
+      for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer;
+      return i;
+    }
+    return -1;
+  };
+  let pos = findIndex(buf, delim);
+  if (pos < 0) return c.text(new TextDecoder().decode(buf));
+  while (pos < buf.length) {
+    const next = findIndex(buf, delim, pos + delim.length);
+    const seg = next < 0 ? buf.subarray(pos + delim.length) : buf.subarray(pos + delim.length, next);
+    if (seg.length > 0) {
+      const headerEnd = findIndex(seg, new TextEncoder().encode('\r\n\r\n'));
+      if (headerEnd >= 0) {
+        const headers = new TextDecoder().decode(seg.subarray(0, headerEnd));
+        if (/name="worker\.js"/i.test(headers)) {
+          let body = seg.subarray(headerEnd + 4);
+          if (body.length >= 2 && body[body.length - 2] === 0x0d && body[body.length - 1] === 0x0a) {
+            body = body.subarray(0, body.length - 2);
+          }
+          return c.text(new TextDecoder().decode(body));
+        }
+      }
+    }
+    if (next < 0) break;
+    pos = next;
+  }
+  return c.text(new TextDecoder().decode(buf));
 });
 
 // ============ Deployments ============
@@ -352,6 +401,28 @@ app.put('/:accountId/pages/:name/bindings', async (c) => {
     method: 'PATCH', body: JSON.stringify({ deployment_configs: body.deployment_configs }),
   });
   return c.json(result);
+});
+
+// ============ Summary (用量 + 已部署数量) ============
+app.get('/summary', async (c) => {
+  const accounts = await getActiveAccountsByFeature(c.env.DB, 'workers');
+  const results = await Promise.all(accounts.map(async (account) => {
+    try {
+      const [usageP, workersP, pagesP] = await Promise.allSettled([
+        getWorkersUsageToday(account, c.env.ENCRYPTION_KEY),
+        cfFetch<{ result: any[] }>(account, `/accounts/${account.account_id}/workers/scripts`, c.env.ENCRYPTION_KEY),
+        cfFetch<{ result: any[] }>(account, `/accounts/${account.account_id}/pages/projects`, c.env.ENCRYPTION_KEY),
+      ]);
+      const usage = usageP.status === 'fulfilled' ? usageP.value : { requests: 0, errors: 0, subrequests: 0, cpuTimeMs: 0 };
+      const workerCount = workersP.status === 'fulfilled' ? (workersP.value.result?.length || 0) : 0;
+      const pagesCount = pagesP.status === 'fulfilled' ? (pagesP.value.result?.length || 0) : 0;
+      return { accountId: account.id, accountName: account.name, ...usage, workerCount, pagesCount };
+    } catch (err) {
+      console.error(`[Summary] Failed for ${account.name}: ${err}`);
+      return { accountId: account.id, accountName: account.name, requests: 0, errors: 0, subrequests: 0, cpuTimeMs: 0, workerCount: 0, pagesCount: 0 };
+    }
+  }));
+  return c.json(results);
 });
 
 // ============ Usage ============

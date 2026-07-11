@@ -44,9 +44,17 @@ const router = Router();
 router.use(demoDestructiveGuard);
 
 // ============ List all ============
-router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
+// 支持 ?accountId= 仅返回该账户的 Worker/Pages（按需加载）；不带参数返回全部（批量部署/环境同步用）
+router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const accounts = getActiveAccountsByFeature('workers');
+    const accountIdFilter = req.query.accountId ? Number(req.query.accountId) : null;
+    let accounts;
+    if (accountIdFilter) {
+      const acc = getAccountById(accountIdFilter);
+      accounts = acc ? [acc] : [];
+    } else {
+      accounts = getActiveAccountsByFeature('workers');
+    }
     const results = await Promise.all(accounts.map(async (account) => {
       const items: Array<any> = [];
       const [workers, pages] = await Promise.allSettled([
@@ -458,6 +466,32 @@ router.put('/:accountId/pages/:name/bindings', async (req: Request, res: Respons
     if (!account) return;
     const result = await updatePagesBindings(account, req.params.name as string, req.body.deployment_configs);
     res.json(result);
+  } catch (err) { next(err); }
+});
+
+// ============ Summary (用量 + 已部署数量) ============
+router.get('/summary', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const accounts = getActiveAccountsByFeature('workers');
+    const results = await Promise.all(accounts.map(async (account) => {
+      try {
+        const [usageRes, workersRes, pagesRes] = await Promise.allSettled([
+          getWorkersUsageToday(account),
+          listWorkers(account),
+          listPages(account),
+        ]);
+        const usage = usageRes.status === 'fulfilled'
+          ? usageRes.value
+          : { requests: 0, errors: 0, subrequests: 0, cpuTimeMs: 0 };
+        const workerCount = workersRes.status === 'fulfilled' ? workersRes.value.length : 0;
+        const pagesCount = pagesRes.status === 'fulfilled' ? pagesRes.value.length : 0;
+        return { accountId: account.id, accountName: account.name, ...usage, workerCount, pagesCount };
+      } catch (err) {
+        appLogger.error(`[Summary] Failed for ${account.name}: ${err}`);
+        return { accountId: account.id, accountName: account.name, requests: 0, errors: 0, subrequests: 0, cpuTimeMs: 0, workerCount: 0, pagesCount: 0 };
+      }
+    }));
+    res.json(results);
   } catch (err) { next(err); }
 });
 

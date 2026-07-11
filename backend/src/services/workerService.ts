@@ -392,10 +392,53 @@ export async function deleteRoute(account: Account, zoneId: string, routeId: str
 }
 
 // --- Script Content ---
+// Cloudflare GET /accounts/{id}/workers/scripts/{name} 返回 multipart/form-data，
+// 真正的脚本内容在 `worker.js` 字段里。SDK 拿到的就是原始 multipart body，
+// 这里用原生 fetch + 自写解析器抠出 worker.js。
 export async function getScriptContent(account: Account, scriptName: string): Promise<string> {
   const accountId = account.account_id;
-  const cf = getCfClient(account);
-  return await cf.workers.scripts.get(scriptName, { account_id: accountId! }) as any;
+  if (!accountId) throw new Error('Account ID is required');
+  const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${encodeURIComponent(scriptName)}`;
+  const resp = await fetch(url, { headers: { ...getAuthHeaders(account), Accept: '*/*' } });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Failed to fetch script content: ${resp.status} ${text.slice(0, 200)}`);
+  }
+  const contentType = resp.headers.get('content-type') || '';
+  const buf = Buffer.from(await resp.arrayBuffer());
+  // 如果不是 multipart，直接当文本返回（兼容未来 CF 改为纯文本的情况）
+  if (!/multipart\/form-data/i.test(contentType)) {
+    return buf.toString('utf-8');
+  }
+  // 解析 multipart：取 boundary，按 boundary 切片，每段查找 Content-Disposition 含 worker.js 的
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  const boundary = boundaryMatch?.[1] || boundaryMatch?.[2];
+  if (!boundary) return buf.toString('utf-8');
+  const delim = Buffer.from(`--${boundary}`);
+  const start = buf.indexOf(delim);
+  if (start < 0) return buf.toString('utf-8');
+  const parts: Buffer[] = [];
+  let pos = start;
+  while (pos < buf.length) {
+    const next = buf.indexOf(delim, pos + delim.length);
+    const seg = next < 0 ? buf.subarray(pos + delim.length) : buf.subarray(pos + delim.length, next);
+    if (seg.length > 0) parts.push(seg);
+    if (next < 0) break;
+    pos = next;
+  }
+  for (const part of parts) {
+    const headerEnd = part.indexOf('\r\n\r\n');
+    if (headerEnd < 0) continue;
+    const headers = part.subarray(0, headerEnd).toString('utf-8');
+    if (!/name="worker\.js"/i.test(headers)) continue;
+    // body 是 headerEnd+4 到末尾，去掉尾部 \r\n
+    let body = part.subarray(headerEnd + 4);
+    if (body.length >= 2 && body[body.length - 2] === 0x0d && body[body.length - 1] === 0x0a) {
+      body = body.subarray(0, body.length - 2);
+    }
+    return body.toString('utf-8');
+  }
+  return buf.toString('utf-8');
 }
 
 // --- Deployments ---

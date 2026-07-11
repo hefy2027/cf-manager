@@ -1,8 +1,12 @@
 import apiClient from './client';
 
 export const workersApi = {
-  // List all
-  getAll: () => apiClient.get('/workers'),
+  // List all (可按 accountId 按需加载，不带参数返回全部)
+  getAll: (accountId?: number) => apiClient.get('/workers', {
+    params: accountId != null ? { accountId } : undefined,
+  }),
+  // 账户用量 + 已部署数量摘要
+  getSummary: () => apiClient.get('/workers/summary'),
 
   // Deploy / Delete
   deploy: (accountId: number, name: string, file: File) => {
