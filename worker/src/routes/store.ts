@@ -144,7 +144,8 @@ async function fetchSourceCatalogImpl(c: any, source: any, skipCache: boolean): 
   // Try KV cache first (unless force refresh)
   if (!skipCache) {
     const cached = await getCached();
-    if (cached) return cached;
+    // 空目录（无模板）不视为有效命中：用户看到空白时应立即重新拉取远程
+    if (cached && cached.templates && cached.templates.length > 0) return cached;
   }
 
   // Fetch from remote with fallback chain

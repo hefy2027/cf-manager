@@ -148,7 +148,9 @@ router.delete('/sources/:id', (req: Request, res: Response, next: NextFunction) 
 async function fetchSourceCatalog(source: any): Promise<Catalog | null> {
   // Check cache
   const cached = catalogCache.get(source.id);
-  if (cached) {
+  // 空目录（无模板）不视为有效命中：用户看到空白时应立即重新拉取，
+  // 而不是长期返回缓存中的空结果导致页面一直空白。
+  if (cached && cached.templates && cached.templates.length > 0) {
     // Try refresh in background
     refreshSourceInBackground(source).catch(e => appLogger.error(`[Store] refresh ${source.id}: ${e}`));
     return cached;
