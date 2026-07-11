@@ -65,11 +65,6 @@
 - **认证中间件加固**：当 `API_SECRET` 环境变量未配置时，不再静默跳过认证，而是自动生成密码学随机临时 secret 并在控制台输出明确的安全告警
 - **审计日志增强**：Worker 部署审计日志 `detail` 字段新增来源 URL 记录（`url=...` / `source=upload`），便于事后安全追溯
 
-### 📄 文档
-
-- 新增 `docs/ssrf-fix-plan.md`：SSRF 漏洞详细修复方案文档
-- 新增 `docs/cve-response-email.md`：回复北邮研究者的 CVE 同意邮件稿
-
 ### 🙏 致谢
 
 感谢北京邮电大学网络空间安全学院 Liu Huan 和 Zifeng Kang 的负责任漏洞披露。
