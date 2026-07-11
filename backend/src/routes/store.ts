@@ -7,6 +7,7 @@ import { validateCatalog, Catalog, CatalogTemplate } from '../services/catalogVa
 import { deployTemplate } from '../services/catalogDeploy';
 import { getAccountById } from '../models/account';
 import { appLogger } from '../services/logger';
+import { assertUrlSafe } from '../services/ssrfGuard';
 
 // 主源用 surge.sh：Surge 静态托管，更新即时生效，避免 jsDelivr 缓存 GitHub 主分支导致更新延迟。
 // 兜底顺序：surge.sh → jsDelivr → GitHub raw（GitHub raw 放最后，作为最终兜底）。
@@ -43,9 +44,10 @@ async function testCatalogUrl(url: string): Promise<CatalogUrlTestResult> {
   }
   let resp;
   try {
+    await assertUrlSafe(url);
     resp = await fetch(url);
   } catch (e: any) {
-    return { ok: false, errorCode: 'FETCH_ERROR', error: `无法连接: ${e.message}` };
+    return { ok: false, errorCode: 'SSRF_BLOCKED', error: e.message || `无法连接: ${e.message}` };
   }
   if (!resp.ok) {
     return { ok: false, status: resp.status, errorCode: 'FETCH_ERROR', error: `URL 不可达: HTTP ${resp.status}` };
@@ -108,6 +110,12 @@ router.put('/sources/:id', async (req: Request, res: Response, next: NextFunctio
       return;
     }
     if (body.url && body.url !== source.url) {
+      try {
+        await assertUrlSafe(body.url);
+      } catch (e: any) {
+        res.status(e.statusCode || 403).json({ error: { code: 'SSRF_BLOCKED', message: e.message } });
+        return;
+      }
       const resp = await fetch(body.url);
       if (!resp.ok) { res.status(400).json({ error: { code: 'FETCH_ERROR', message: `URL 不可达: ${resp.status}` } }); return; }
       const json: Catalog = await resp.json() as Catalog;
@@ -158,6 +166,7 @@ async function refreshSource(source: any): Promise<Catalog | null> {
   let lastError = '';
   for (const url of urls) {
     try {
+      await assertUrlSafe(url);
       const headers: Record<string, string> = {};
       // etag 仅对主记录 url 携带，避免跨地址 etag 误判
       if (url === source.url && source.etag) headers['If-None-Match'] = source.etag;
@@ -278,7 +287,20 @@ router.post('/deploy', async (req: Request, res: Response, next: NextFunction) =
       secretValues: secretValues || {},
       deployType: deployType || undefined,
     });
-    res.status(result.success ? 200 : 500).json(result);
+    if (result.success) {
+      res.json(result);
+    } else {
+      // 使用标准 error 格式，避免 responseWrapper 将 success:false 体的其余字段包装为 error 对象
+      res.status(500).json({
+        error: {
+          code: 'DEPLOY_FAILED',
+          message: result.error || '部署失败',
+          rolledBack: result.rolledBack,
+          rollbackErrors: result.rollbackErrors,
+          warnings: result.warnings,
+        },
+      });
+    }
   } catch (err) { next(err); }
 });
 

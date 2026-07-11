@@ -34,6 +34,8 @@ export interface CatalogBinding {
   title?: string;
   action?: 'create-or-reuse' | 'prompt';
   required?: boolean;
+  secret?: boolean;
+  value?: string;
   initSqlUrl?: string;
   initSql?: string;
 }

@@ -46,6 +46,7 @@
         "action": { "enum": ["create-or-reuse", "prompt"] },
         "required": { "type": "boolean" },
         "secret": { "type": "boolean", "description": "仅对 type:var 生效。true/缺省=作为加密 secret 写入（secret_text，前端显示密码框）；false=作为明文环境变量写入（plain_text，前端显示普通文本框）。" },
+        "value": { "type": "string", "description": "仅对 type:var 生效。指定该环境变量的默认值。对 action:create-or-reuse 的 binding，此值直接写入；对 action:prompt 的 binding，作为用户未填写时的兜底默认值。" },
         "initSqlUrl": { "type": "string", "format": "uri" },
         "initSql": { "type": "string" }
       },
@@ -59,6 +60,18 @@
           "else": {
             "not": { "required": ["initSql", "initSqlUrl"] },
             "errorMessage": "initSql / initSqlUrl 仅适用于 d1 绑定"
+          }
+        },
+        {
+          "if": {
+            "not": {
+              "properties": { "type": { "const": "var" } },
+              "required": ["type"]
+            }
+          },
+          "then": {
+            "not": { "required": ["value"] },
+            "errorMessage": "value 仅适用于 var 绑定"
           }
         }
       ]

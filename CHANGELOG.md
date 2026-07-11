@@ -1,33 +1,16 @@
 # Changelog
 
-## [1.3.1] - 2026-07-09
-
-### 🐛 修复
-
-- **Catalog 校验器运行时报错**：`catalogValidator` 改为 ajv **standalone 预编译**，消除 Workers/Pages 运行时调用 `new Function`（被 CF Workers 运行时禁止）导致的校验失败；backend Docker 构建生成校验器时显式指定 `CATALOG_SCHEMA_PATH`，确保 schema 路径正确（27bfb26、bd2deeb）。
-- **默认 catalog 主源切换**：官方默认源主地址改为 `surge.sh`（更新即时生效，规避 jsDelivr 缓存 GitHub 主分支导致的延迟），fallback 链调整为 `surge.sh → jsDelivr → GitHub raw`；**worker 端同步**主源配置（d8faeab、6d440d2）。
-- **Catalog schema 扩展**：schema 顶层允许 `mirrorOf` / `description` 等镜像元数据字段；binding 新增 `secret` 布尔字段（仅 `type:var` 生效）——`true`/缺省按加密 `secret_text` 写入（前端密码框），`false` 按明文 `plain_text` 写入（前端普通文本框）（43e6521、e81bae2）。
-- **Pages 端变量类型丢失**：Worker 与 backend 在写入 Pages `deployment_configs.env_vars` 时保留 `cfBinding.type`（`secret_text`/`plain_text`），修复此前只写 `{ value }` 导致变量被强制退化为明文、与 Worker 端行为不一致的问题（e81bae2）。
-- **Hybrid 部署误删 Worker**：修复 hybrid 模板在 **Pages 环节失败**（如产物下载 429/超时）时，`rollback` 会**无条件删除已部署成功的 Worker** 的连坐 bug；现仅回滚本轮未成功部署的部分。同时部署失败时补充 `appLogger.error` 输出真实报错到控制台（e81bae2）。
-- **Worker 端 hybrid 部署崩溃**：worker 端 `catalogDeploy` 此前只读取 `template.source.url` 且完全没有 `hybrid` 分支，部署 `hybrid-demo` / `edgetunnel` 等 hybrid 模板时 `template.source` 为 `undefined`，抛 `Cannot read properties of undefined (reading 'url')`；现已重构支持 hybrid（按 `template.type` 分别下载 `sources.worker` / `sources.pages` 并部署），补全部署后 URL 返回，并为 `rollback` 增加 `deleteWorker` 保护（与 backend 一致，避免 hybrid 一处失败连坐删除成功部分）。
-
-### 🎨 前端
-
-- **部署对话框区分密钥与配置项**：`StoreDeployDialog` 将 `secret !== false` 的 var 归为「需要填写的密钥」（密码框），`secret === false` 的 var 归为「需要填写的配置项」（普通文本框），并纳入部署校验（e81bae2）。
-- **R2 预拉取误报**：`StoreDeployDialog` 改为**只拉取当前模板实际用到的资源类型**（按 `template.bindings` 过滤 kv/d1/r2），避免对未开通 R2 的账号无谓调用 R2 API 而误报 “R2 is not enabled”（08c5700）。
-
----
-
-## [1.3.0] - 2026-07-09
+## [1.2.5] - 2026-07-11
 
 ### 🚀 新特性
 
+- **版本号标识**：部署时自动从 `CHANGELOG.md` 提取版本号和 git commit SHA，`/api/settings` 接口返回 `version` 和 `git_commit` 字段，管理面板设置页面同步展示版本号，解决线上版本识别问题。
 - **应用商店（Catalog Store）**：新增完整的应用商店能力，用户可从 catalog 源浏览、部署 Cloudflare Worker / Pages 模板。
   - **后端**：新增 `store` 路由（catalog 源 CRUD、模板列表、部署、刷新）、`catalogSource` 数据模型、`catalogDeploy` 部署服务；`db.ts` 增加 catalog 源相关表与初始化。
   - **Worker**：对称实现 `store` 路由、D1 `catalogSource` 模型与 `schema.sql`、KV 缓存（`catalog:${id}`）、`catalogDeploy` 服务；`index.ts` / `wrangler.toml` 接入新路由与绑定。
   - **前端**：新增「商店」视图 `StoreView.vue` 与 `StoreDeployDialog.vue` 部署对话框，路由与侧边栏接入；`api/store.ts` 封装全部 store 接口。
 - **Catalog 源可用性测试**：新增 `POST /store/sources/test` 接口（backend 与 worker 对称实现），在添加/编辑自定义源前测试 URL 是否可拉取且符合 catalog 格式，前端设置页对接实时反馈（`✓ 可用，包含 N 个模板` / `✗ 错误原因`），测试通过前禁用「添加/保存」按钮。
-- **官方源多地址 fallback**：官方默认源支持多个备用地址，主地址不可达（如 GitHub raw 被限流）时按顺序自动切换镜像，当前 fallback 链为 GitHub raw → jsdelivr → surge.sh；自定义源仅使用自身 URL，不触发 fallback。
+- **官方源多地址 fallback**：官方默认源支持多个备用地址，主地址不可达（如 GitHub raw 被限流）时按顺序自动切换镜像，当前 fallback 链为 `surge.sh → jsDelivr → GitHub raw`；自定义源仅使用自身 URL，不触发 fallback。
 - **Pages 部署能力**：新增 Cloudflare Pages 项目部署能力——worker 端 `pagesDeploy.ts` 与后端 `workerService` 的 `deployPages()`，支持创建/确保 Project 并上传构建产物发布部署；补充 `docs/pages-upload.md` 调研与实现指南（文档化 multipart 直传契约）。
 - **设置页 Catalog 源管理**：`SettingsView.vue` 支持添加 / 编辑 / 删除自定义 catalog 源，编辑默认源 URL 受保护（禁止修改官方源地址）。
 
@@ -36,13 +19,35 @@
 - **catalog 校验逻辑共享化**：将 catalog 校验逻辑抽离到 `shared/catalogValidator.ts` 与 `shared/catalog.schema.json`，backend 与 worker 共用，删除各自旧有的 `catalogValidator.ts`；新增 `scripts/sync-shared.js` 同步脚本替换旧的 `scripts/sync-pricing.js`。
 - **部署服务整合**：`workerService.ts` 与 worker `workers.ts` 重构，承接 store / Pages 部署逻辑，统一 catalog 拉取与 etag 缓存策略。
 
----
+### 🐛 修复
 
-## [1.2.0] - 2026-07-08
+- **Catalog 校验器运行时报错**：`catalogValidator` 改为 ajv **standalone 预编译**，消除 Workers/Pages 运行时调用 `new Function`（被 CF Workers 运行时禁止）导致的校验失败。
+- **默认 catalog 主源切换**：官方默认源主地址改为 `surge.sh`（更新即时生效），fallback 链调整为 `surge.sh → jsDelivr → GitHub raw`；worker 端同步主源配置。
+- **Catalog schema 扩展**：schema 顶层允许 `mirrorOf` / `description` 等镜像元数据字段；binding 新增 `secret` 布尔字段（`true`/缺省按加密写入，前端密码框；`false` 按明文写入，前端普通文本框）。
+- **Pages 端变量类型丢失**：Worker 与 backend 在写入 Pages `deployment_configs.env_vars` 时保留 `cfBinding.type`，修复变量被强制退化为明文的问题。
+- **Hybrid 部署误删 Worker**：修复 hybrid 模板在 Pages 环节失败时 `rollback` 会无条件删除已部署成功 Worker 的连坐 bug；现仅回滚本轮未成功部署的部分，并在失败时输出真实报错。
+- **Worker 端 hybrid 部署崩溃**：worker 端 `catalogDeploy` 重构支持 hybrid（按 `template.type` 分别下载 `sources.worker` / `sources.pages` 并部署），补全部署后 URL 返回，并为 `rollback` 增加 `deleteWorker` 保护。
 
-### 🚀 新特性
+### 🎨 前端
 
-- **版本号标识**：部署时自动从 `CHANGELOG.md` 提取版本号和 git commit SHA，`/api/settings` 接口返回 `version` 和 `git_commit` 字段，管理面板设置页面同步展示版本号，解决线上版本识别问题。
+- **部署对话框区分密钥与配置项**：`StoreDeployDialog` 将 `secret !== false` 的 var 归为「需要填写的密钥」（密码框），`secret === false` 的 var 归为「需要填写的配置项」（普通文本框），并纳入部署校验。
+- **R2 预拉取误报**：`StoreDeployDialog` 改为只拉取当前模板实际用到的资源类型（按 `template.bindings` 过滤 kv/d1/r2），避免对未开通 R2 的账号无谓调用 R2 API 而误报 “R2 is not enabled”。
+
+### 🔒 安全修复
+
+- **SSRF / 任意远程 Worker 部署漏洞修复**：修复 Worker 部署（单部署 + 批量部署）与 Catalog 源拉取中全部裸 `fetch(url)` 调用。新增 `worker/src/services/ssrfGuard.ts` 与 `backend/src/services/ssrfGuard.ts`（双后端对称），提供 `fetchScriptSafely()` / `assertUrlSafe()`，强制校验：
+  - 协议白名单（仅允许 `https:`，后端 Docker 版额外放行 `http://localhost` 用于本地 catalog 调试）
+  - 主机/IP 校验：Worker 端拒绝环回/私网/链路本地/唯一本地 IP 字面量；后端通过 `dns.lookup` 解析域名后逐地址拒绝私网（真正阻断 DNS 重绑定类 SSRF）
+  - 可选来源白名单（环境变量 `WORKER_DEPLOY_URL_ALLOWLIST`，逗号分隔主机名）
+  - 重定向防护（`redirect: manual`，逐跳重新校验 Location）
+  - Content-Type 校验（仅接受 JavaScript / 文本类型）
+  - 响应大小限制（最大 5 MiB）
+  - 恢复部署审计日志 `detail` 字段的来源 URL 记录（`url=...` / `source=upload`）
+  - **部署建议**：生产环境强烈建议配置 `WORKER_DEPLOY_URL_ALLOWLIST` 仅允许可信脚本源；若无需 URL 部署，应直接在前端/接口层面禁用该能力。
+
+### 🙏 致谢
+
+感谢北京邮电大学网络空间安全学院 Liu Huan 和 Zifeng Kang 的负责任漏洞披露与版本复核。
 
 ---
 

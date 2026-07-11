@@ -70,7 +70,7 @@
           </n-radio-group>
         </n-form-item>
         <n-form-item label="账号">
-          <n-select v-model:value="deployForm.accountId" :options="accountOptions" />
+          <n-select v-model:value="deployForm.accountId" :options="accountOptions" :disabled="isRedeploy" />
         </n-form-item>
         <n-form-item label="名称">
           <n-input v-model:value="deployForm.name" :placeholder="deployType === 'pages' ? 'Pages 项目名称' : 'Worker 名称'" :disabled="isRedeploy" />
@@ -531,6 +531,7 @@ import { NButton, NSpace, NTag, useMessage, NSwitch, NRadio, NRadioGroup } from 
 import type { DataTableColumns } from 'naive-ui';
 import { useWorkerStore } from '../stores/workerStore';
 import { useAccountStore } from '../stores/accountStore';
+import { accountsApi } from '../api/accounts';
 import { workersApi } from '../api/workers';
 import { formatCN } from '../utils/dateFormat';
 import { loadDemoAccounts, isDemoAccount } from '../utils/demoAccounts';
@@ -844,10 +845,19 @@ const pagesDeployments = ref<any[]>([]);
 const pagesDeploymentsLoading = ref(false);
 
 const accountOptions = computed(() =>
-  accountStore.accounts
+  allAccounts.value
     .filter((a: any) => a.is_active && (a.enabled_features || 'ai,workers,browser_render,dns,storage').includes('workers'))
     .map((a: any) => ({ label: a.name, value: a.id }))
 );
+
+// 部署对话框需要全部账户（不分页），accountStore.accounts 仅含当前页
+const allAccounts = ref<any[]>([]);
+async function loadAllAccounts() {
+  try {
+    const { data } = await accountsApi.getAll({ pageSize: 10000 });
+    allAccounts.value = data.accounts || [];
+  } catch { allAccounts.value = []; }
+}
 
 // ============ Deploy ============
 const isRedeploy = ref(false);
@@ -1442,6 +1452,7 @@ onMounted(async () => {
   await loadDemoAccounts();
   workerStore.fetchWorkers();
   accountStore.fetchAccounts();
+  loadAllAccounts();
   loadUsage();
 });
 </script>
