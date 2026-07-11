@@ -8,6 +8,7 @@ import {
 import { validateCatalog, type Catalog, type CatalogTemplate } from '../services/catalogValidator';
 import { deployTemplate } from '../services/catalogDeploy';
 import { getAccountById } from '../db/models';
+import { assertUrlSafe } from '../services/ssrfGuard';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -39,9 +40,10 @@ async function testCatalogUrl(url: string): Promise<CatalogUrlTestResult> {
     return { ok: false, errorCode: 'VALIDATION_ERROR', error: 'url must be a valid HTTPS URL' };
   }
   try {
+    assertUrlSafe(url);
     const resp = await fetch(url);
     if (!resp.ok) return { ok: false, status: resp.status, errorCode: 'FETCH_ERROR', error: `URL 不可达: HTTP ${resp.status}` };
-    const json = await resp.json();
+    const json: any = await resp.json();
     const result = validateCatalog(json);
     if (!result.valid) return { ok: false, errorCode: 'INVALID_CATALOG', error: `不是有效的 catalog: ${result.errors.join('; ')}` };
     return { ok: true, templateCount: Array.isArray(json.templates) ? json.templates.length : 0, etag: resp.headers.get('etag'), json };
@@ -140,6 +142,7 @@ async function fetchSourceCatalog(c: any, source: any): Promise<Catalog | null> 
   let lastError = '';
   for (const url of urls) {
     try {
+      assertUrlSafe(url);
       const headers: Record<string, string> = {};
       // etag 仅对主记录 url 携带，避免跨地址 etag 误判
       if (url === source.url && source.etag) headers['If-None-Match'] = source.etag;
@@ -276,7 +279,19 @@ app.post('/deploy', async (c) => {
     db: c.env.DB,
   });
 
-  return c.json(result, result.success ? 200 : 500);
+  if (result.success) {
+    return c.json(result, 200);
+  } else {
+    return c.json({
+      error: {
+        code: 'DEPLOY_FAILED',
+        message: result.error || '部署失败',
+        rolledBack: result.rolledBack,
+        rollbackErrors: result.rollbackErrors,
+        warnings: result.warnings,
+      },
+    }, 500);
+  }
 });
 
 export default app;

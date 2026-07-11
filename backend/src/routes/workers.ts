@@ -1,12 +1,12 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
-import AdmZip from 'adm-zip';
 import { getActiveAccountsByFeature, getAccountById } from '../models/account';
 import { createAuditLog } from '../models/auditLog';
 import { appLogger } from '../services/logger';
 import { getAccountOr404, demoDestructiveGuard } from './routeUtils';
 import {
   listWorkers, listPages, deployWorker, deployWorkerFromUrl, deleteWorker, deletePagesProject, getWorkerLogs, deployPages,
+  extractZipFiles, validatePagesProjectName,
   // Secrets
   listSecrets, updateSecret, deleteSecret,
   // Schedules
@@ -33,7 +33,11 @@ import {
 import { getAllZones } from '../services/accountRouter';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1 * 1024 * 1024 } });
-const uploadPages = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024, files: 100 } });
+// Pages 部署：单文件 50MB，最多 100 个文件，总上传限制 200MB
+const uploadPages = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024, files: 100, fields: 10, fieldSize: 1024 * 1024 },
+});
 const router = Router();
 
 // 演示账户：拦截所有销毁/删除类操作（DELETE 等）
@@ -138,6 +142,9 @@ async function handlePagesDeploy(req: Request, res: Response, next: NextFunction
     if (!account) return;
     const name = req.body.name as string;
     if (!name) { res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Project name is required' } }); return; }
+    if (!validatePagesProjectName(name)) {
+      res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: '项目名只能包含小写字母、数字和连字符，且以字母或数字开头' } }); return;
+    }
     
     const uploadedFiles = req.files as Express.Multer.File[] | undefined;
     let files: Array<{ path: string; buffer: Buffer }> = [];
@@ -146,28 +153,8 @@ async function handlePagesDeploy(req: Request, res: Response, next: NextFunction
     if (uploadedFiles && uploadedFiles.length > 0) {
       appLogger.info(`[Pages Deploy Route] Received ${uploadedFiles.length} files: ${uploadedFiles.map(f => f.originalname).join(', ')}`);
       if (uploadedFiles.length === 1 && uploadedFiles[0].originalname?.toLowerCase().endsWith('.zip')) {
-        const zip = new AdmZip(uploadedFiles[0].buffer);
-        const entries = zip.getEntries();
-        const filePaths = entries.filter(e => !e.isDirectory).map(e => e.entryName.replace(/\\/g, '/'));
-        let prefix = '';
-        if (filePaths.length > 0) {
-          const parts = filePaths[0].split('/');
-          if (parts.length > 1) {
-            const candidate = parts[0] + '/';
-            if (filePaths.every(p => p.startsWith(candidate))) {
-              prefix = candidate;
-            }
-          }
-        }
-        appLogger.info(`[Pages Deploy Route] ZIP prefix detected: "${prefix}", total entries: ${entries.length}`);
-        for (const entry of entries) {
-          if (!entry.isDirectory) {
-            const p = entry.entryName.replace(/\\/g, '/');
-            const finalPath = prefix ? p.slice(prefix.length) : p;
-            appLogger.info(`[Pages Deploy Route] ZIP entry: "${p}" -> final path: "${finalPath}"`);
-            files.push({ path: finalPath, buffer: entry.getData() });
-          }
-        }
+        files = extractZipFiles(uploadedFiles[0].buffer);
+        appLogger.info(`[Pages Deploy Route] ZIP extracted: ${files.length} files`);
       } else {
         files = uploadedFiles.map(f => ({
           path: (f as any).originalname || f.fieldname,
@@ -180,7 +167,9 @@ async function handlePagesDeploy(req: Request, res: Response, next: NextFunction
     const result = await deployPages(account, name, files, skipCreateProject);
     createAuditLog(account.id, 'deploy_pages', name, files.length > 0 ? `${files.length} files` : 'empty project', 'success');
     appLogger.info(`[Pages Deploy Route] Success for ${name}`);
-    res.status(201).json(result);
+    // 剥离 CF API 返回的 success 字段，避免与 responseWrapper 中间件冲突导致双重包装
+    const { success: _cfSuccess, ...deploymentData } = result;
+    res.status(201).json(deploymentData);
   } catch (err: any) {
     appLogger.error(`[Pages Deploy Route] Error: ${err.message} ${err.statusCode || 500}`);
     next(err);
@@ -522,7 +511,7 @@ router.post('/batch-deploy', upload.single('script'), async (req: Request, res: 
 });
 
 // ============ Batch Deploy Pages ============
-router.post('/batch-deploy-pages', upload.single('zipFile'), async (req: Request, res: Response, next: NextFunction) => {
+router.post('/batch-deploy-pages', uploadPages.single('zipFile'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { targets } = req.body;
     const parsedTargets = typeof targets === 'string' ? JSON.parse(targets) : targets;
@@ -532,11 +521,7 @@ router.post('/batch-deploy-pages', upload.single('zipFile'), async (req: Request
     if (!req.file) {
       res.status(400).json({ error: { code: 'NO_FILE', message: 'Zip file is required' } }); return;
     }
-    const zip = new AdmZip(req.file.buffer);
-    const entries = zip.getEntries();
-    const files = entries
-      .filter(e => !e.isDirectory)
-      .map(e => ({ path: e.entryName, buffer: e.getData() }));
+    const files = extractZipFiles(req.file.buffer);
 
     if (files.length === 0) {
       res.status(400).json({ error: { code: 'EMPTY_ZIP', message: 'Zip file contains no files' } }); return;
@@ -547,6 +532,9 @@ router.post('/batch-deploy-pages', upload.single('zipFile'), async (req: Request
       try {
         const account = getAccountById(t.accountId);
         if (!account) { results.push({ ...t, success: false, error: 'Account not found' }); continue; }
+        if (!validatePagesProjectName(t.workerName)) {
+          results.push({ ...t, success: false, error: '项目名只能包含小写字母、数字和连字符' }); continue;
+        }
         await deployPages(account, t.workerName, files);
         createAuditLog(account.id, 'batch_deploy_pages', t.workerName, `${files.length} files`, 'success');
         results.push({ ...t, success: true });

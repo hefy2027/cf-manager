@@ -4,8 +4,7 @@ import { proxyFetch } from './proxyService';
 import { createAuditLog } from '../models/auditLog';
 import type { CatalogTemplate, CatalogBinding } from './catalogValidator';
 import { appLogger } from './logger';
-import AdmZip from 'adm-zip';
-import { deployWorker, deployPages } from './workerService';
+import { deployWorker, deployPages, extractZipFiles, validatePagesProjectName, ensurePagesProject } from './workerService';
 
 export interface DeployOptions {
   account: Account;
@@ -71,12 +70,14 @@ async function resolveBinding(
   if (binding.type === 'var') {
     // secret !== false → 加密 secret_text；secret === false → 明文 plain_text
     const isSecret = binding.secret !== false;
+    // 使用模板中定义的 value 作为默认值（适用于 action:create-or-reuse 或 prompt 的兇底默认值）
+    const text = binding.value || '';
     return {
       type: 'var',
       name: binding.name,
       cfBinding: isSecret
-        ? { type: 'secret_text', name: binding.name, text: '' }
-        : { type: 'plain_text', name: binding.name, text: '' },
+        ? { type: 'secret_text', name: binding.name, text }
+        : { type: 'plain_text', name: binding.name, text },
       created: false,
     };
   }
@@ -182,11 +183,7 @@ async function deployPagesArtifact(
   const cf = getCfClient(account);
 
   // 1. Create project if not exists
-  try {
-    await cf.pages.projects.create({ account_id: accountId, name, production_branch: 'main' } as any);
-  } catch (e: any) {
-    if (e?.status !== 409) throw e;
-  }
+  await ensurePagesProject(account, name);
 
   // 2. Set deployment_configs (bindings + env vars) BEFORE deploying
   //    This ensures the first deployment has the correct bindings available.
@@ -266,14 +263,8 @@ async function deployPagesArtifact(
     }
   }
 
-  // 3. Extract zip to files array
-  const zip = new AdmZip(content);
-  const entries = zip.getEntries().filter(e => !e.isDirectory);
-  const files: Array<{ path: string; buffer: Buffer }> = [];
-  for (const entry of entries) {
-    const filePath = String(entry.entryName).replace(/\\/g, '/').replace(/^\/+/, '');
-    files.push({ path: filePath, buffer: entry.getData() });
-  }
+  // 3. Extract zip to files array (自动剥离公共前缀)
+  const files = extractZipFiles(content);
 
   // 4. Deploy via SDK multipart form upload (handles manifest + file uploads correctly)
   //    deployPages handles special files like _worker.js, _headers, _redirects, etc.
@@ -292,9 +283,13 @@ async function deployPagesArtifact(
 
 export async function deployTemplate(opts: DeployOptions): Promise<DeployResult> {
   const { account, template, name, bindingSelections, secretValues, deployType } = opts;
+  if (!validatePagesProjectName(name)) {
+    return { success: false, error: '项目名只能包含小写字母、数字和连字符，且以字母或数字开头', warnings: [], bindings: [] };
+  }
   const warnings: string[] = [];
   const resolvedBindings: ResolvedBinding[] = [];
   const urls: string[] = [];
+  let workerDeployed = false;
 
   try {
     // Step 1: Determine what to deploy
@@ -308,16 +303,15 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
       const selection = bindingSelections[binding.name];
       const resolved = await resolveBinding(account, binding, selection, template.id);
       if (binding.type === 'var' && binding.action === 'prompt') {
-        const val = secretValues[binding.name];
+        const val = secretValues[binding.name] || binding.value || '';
         if (binding.required && !val) throw new Error(`必填项 ${binding.name} 未填写`);
-        resolved.cfBinding.text = val || '';
+        resolved.cfBinding.text = val;
       }
       resolvedBindings.push(resolved);
     }
 
   const accountId = account.account_id!;
   const cf = getCfClient(account);
-  let workerDeployed = false;
   let pagesDeployed = false;
 
     // Step 3: Deploy worker

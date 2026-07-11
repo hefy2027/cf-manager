@@ -4,7 +4,8 @@ import { getAccountById, getActiveAccountsByFeature, addAuditLog } from '../db/m
 import { cfFetch, cfFetchRaw, cfFetchAll } from '../services/cfApi';
 import { getWorkersUsageToday } from '../services/quotaTracker';
 import { demoDestructiveGuard } from '../services/demo';
-import { deployPages, extractZipFiles } from '../services/pagesDeploy';
+import { deployPages, extractZipFiles, validatePagesProjectName, ensurePagesProject } from '../services/pagesDeploy';
+import { fetchScriptSafely } from '../services/ssrfGuard';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -45,6 +46,7 @@ app.post('/:accountId/workers', async (c) => {
 
   let name: string;
   let scriptContent: string;
+  let deploySource = 'upload';
 
   if (contentType.includes('multipart/form-data')) {
     const formData = await c.req.formData();
@@ -53,9 +55,13 @@ app.post('/:accountId/workers', async (c) => {
     const file = formData.get('script') as File | null;
     if (!name) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Worker name is required' } }, 400);
     if (url) {
-      const resp = await fetch(url);
-      if (!resp.ok) return c.json({ error: { code: 'FETCH_ERROR', message: `Failed to fetch script: ${resp.status}` } }, 400);
-      scriptContent = await resp.text();
+      deploySource = `url=${url}`;
+      try {
+        scriptContent = await fetchScriptSafely(url, c.env);
+      } catch (e: any) {
+        const code = e.statusCode === 403 ? 'SSRF_BLOCKED' : 'FETCH_ERROR';
+        return c.json({ error: { code, message: e.message } }, e.statusCode || 400);
+      }
     } else if (file) {
       scriptContent = await file.text();
     } else {
@@ -66,9 +72,13 @@ app.post('/:accountId/workers', async (c) => {
     name = body.name;
     if (!name) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Worker name is required' } }, 400);
     if (body.url) {
-      const resp = await fetch(body.url);
-      if (!resp.ok) return c.json({ error: { code: 'FETCH_ERROR', message: `Failed to fetch script: ${resp.status}` } }, 400);
-      scriptContent = await resp.text();
+      deploySource = `url=${body.url}`;
+      try {
+        scriptContent = await fetchScriptSafely(body.url, c.env);
+      } catch (e: any) {
+        const code = e.statusCode === 403 ? 'SSRF_BLOCKED' : 'FETCH_ERROR';
+        return c.json({ error: { code, message: e.message } }, e.statusCode || 400);
+      }
     } else {
       return c.json({ error: { code: 'NO_FILE', message: 'Script URL is required' } }, 400);
     }
@@ -93,7 +103,7 @@ app.post('/:accountId/workers', async (c) => {
     // Soft fail: user can still enable manually from settings drawer
   }
 
-  await addAuditLog(c.env.DB, { account_id: account.id, action: 'deploy_worker', target: name, status: 'success' });
+  await addAuditLog(c.env.DB, { account_id: account.id, action: 'deploy_worker', target: name, detail: deploySource, status: 'success' });
   return c.json(result, 201);
 });
 
@@ -364,6 +374,7 @@ app.post('/:accountId/pages/deploy', async (c) => {
   const formData = await c.req.formData();
   const name = formData.get('name') as string;
   if (!name) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Project name is required' } }, 400);
+  if (!validatePagesProjectName(name)) return c.json({ error: { code: 'VALIDATION_ERROR', message: '项目名只能包含小写字母、数字和连字符，且以字母或数字开头' } }, 400);
 
   const skipCreateProject = formData.get('skipCreateProject') === 'true';
   const uploadedFiles = formData.getAll('files') as unknown as File[];
@@ -372,22 +383,7 @@ app.post('/:accountId/pages/deploy', async (c) => {
 
   if (uploadedFiles.length === 1 && uploadedFiles[0].name?.toLowerCase().endsWith('.zip')) {
     const zipData = new Uint8Array(await uploadedFiles[0].arrayBuffer());
-    const extracted = await extractZipFiles(zipData);
-    if (extracted.length > 0) {
-      const filePaths = extracted.map(f => f.path);
-      let prefix = '';
-      const parts = filePaths[0].split('/');
-      if (parts.length > 1) {
-        const candidate = parts[0] + '/';
-        if (filePaths.every(p => p.startsWith(candidate))) {
-          prefix = candidate;
-        }
-      }
-      files = extracted.map(f => ({
-        path: prefix ? f.path.slice(prefix.length) : f.path,
-        buffer: f.buffer,
-      }));
-    }
+    files = await extractZipFiles(zipData);
   } else {
     for (const f of uploadedFiles) {
       const buf = new Uint8Array(await f.arrayBuffer());
@@ -396,13 +392,7 @@ app.post('/:accountId/pages/deploy', async (c) => {
   }
 
   if (!skipCreateProject) {
-    try {
-      await cfFetch(account, `/accounts/${account.account_id}/pages/projects`, c.env.ENCRYPTION_KEY, {
-        method: 'POST', body: JSON.stringify({ name, production_branch: 'main' }),
-      });
-    } catch (e: any) {
-      if (!e.body?.includes('already exists') && e.status !== 409) throw e;
-    }
+    await ensurePagesProject(account, c.env.ENCRYPTION_KEY, name);
   }
 
   if (files.length === 0) {
@@ -411,12 +401,14 @@ app.post('/:accountId/pages/deploy', async (c) => {
   }
 
   const result = await deployPages(account, c.env.ENCRYPTION_KEY, name, files, {
-    skipCreateProject: true, // project 已在上方的 if (!skipCreateProject) 块中创建
+    skipCreateProject: true,
     commitMessage: 'Deploy via CF Manager',
   });
 
   await addAuditLog(c.env.DB, { account_id: account.id, action: 'deploy_pages', target: name, detail: `${files.length} files`, status: 'success' });
-  return c.json(result, 201);
+  // 剥离 CF API 返回的 success 字段，避免与 responseWrapper 冲突
+  const { success: _cfSuccess, ...deploymentData } = result;
+  return c.json(deploymentData, 201);
 });
 
 // ============ Batch Deploy ============
@@ -443,9 +435,12 @@ app.post('/batch-deploy', async (c) => {
   if (!scriptContent && !scriptUrl) return c.json({ error: { code: 'NO_FILE', message: 'Script or URL required' } }, 400);
 
   if (scriptUrl && !scriptContent) {
-    const resp = await fetch(scriptUrl);
-    if (!resp.ok) return c.json({ error: { code: 'FETCH_ERROR', message: `Failed: ${resp.status}` } }, 400);
-    scriptContent = await resp.text();
+    try {
+      scriptContent = await fetchScriptSafely(scriptUrl, c.env);
+    } catch (e: any) {
+      const code = e.statusCode === 403 ? 'SSRF_BLOCKED' : 'FETCH_ERROR';
+      return c.json({ error: { code, message: e.message } }, e.statusCode || 400);
+    }
   }
 
   const results = await Promise.all(targets.map(async (t: { accountId: number; workerName: string }) => {
@@ -467,7 +462,7 @@ app.post('/batch-deploy', async (c) => {
         // Soft fail: user can still enable manually from settings drawer
       }
 
-      await addAuditLog(c.env.DB, { account_id: account.id, action: 'batch_deploy', target: t.workerName, status: 'success' });
+      await addAuditLog(c.env.DB, { account_id: account.id, action: 'batch_deploy', target: t.workerName, detail: scriptUrl ? `url=${scriptUrl}` : 'upload', status: 'success' });
       return { ...t, success: true };
     } catch (err: any) {
       return { ...t, success: false, error: err.message };
@@ -495,6 +490,7 @@ app.post('/batch-deploy-pages', async (c) => {
     try {
       const account = await getAccountById(c.env.DB, t.accountId);
       if (!account) { results.push({ ...t, success: false, error: 'Account not found' }); continue; }
+      if (!validatePagesProjectName(t.workerName)) { results.push({ ...t, success: false, error: '项目名只能包含小写字母、数字和连字符' }); continue; }
 
       await deployPages(account, c.env.ENCRYPTION_KEY, t.workerName, files, {
         commitMessage: 'Batch deploy via CF Manager',

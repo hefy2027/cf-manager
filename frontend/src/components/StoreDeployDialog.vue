@@ -204,7 +204,13 @@ async function handleDeploy() {
 
     emit('deployed', result);
   } catch (e: any) {
-    emit('deployed', { success: false, error: e.errorMessage || e.message });
+    const errData = e?.response?.data?.error;
+    emit('deployed', {
+      success: false,
+      error: e.errorMessage || e.message,
+      rolledBack: errData?.rolledBack,
+      rollbackErrors: errData?.rollbackErrors,
+    });
   } finally {
     deploying.value = false;
   }

@@ -1,7 +1,7 @@
 import type { Account } from '../db/models';
 import { cfFetch, cfFetchRaw, cfFetchAll } from './cfApi';
 import type { CatalogTemplate, CatalogBinding } from './catalogValidator';
-import { deployPages, extractZipFiles } from './pagesDeploy';
+import { deployPages, extractZipFiles, validatePagesProjectName, ensurePagesProject } from './pagesDeploy';
 import { addAuditLog } from '../db/models';
 
 export interface DeployOptions {
@@ -81,12 +81,14 @@ async function resolveBinding(
   if (binding.type === 'var') {
     // secret !== false → 加密 secret_text；secret === false → 明文 plain_text
     const isSecret = binding.secret !== false;
+    // 使用模板中定义的 value 作为默认值（适用于 action:create-or-reuse 或 prompt 的兇底默认值）
+    const text = binding.value || '';
     return {
       type: 'var',
       name: binding.name,
       cfBinding: isSecret
-        ? { type: 'secret_text', name: binding.name, text: '' }
-        : { type: 'plain_text', name: binding.name, text: '' },
+        ? { type: 'secret_text', name: binding.name, text }
+        : { type: 'plain_text', name: binding.name, text },
       created: false,
     };
   }
@@ -211,6 +213,9 @@ async function getWorkerSubdomain(account: Account, encryptionKey: string): Prom
 
 export async function deployTemplate(opts: DeployOptions): Promise<DeployResult> {
   const { account, encryptionKey, template, name, bindingSelections, secretValues, deployType } = opts;
+  if (!validatePagesProjectName(name)) {
+    return { success: false, error: '项目名只能包含小写字母、数字和连字符，且以字母或数字开头', warnings: [], bindings: [] };
+  }
   const warnings: string[] = [];
   const resolvedBindings: ResolvedBinding[] = [];
   const urls: string[] = [];
@@ -223,9 +228,9 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
       const resolved = await resolveBinding(account, encryptionKey, binding, selection, template.id);
       // Fill in secret values for var bindings
       if (binding.type === 'var' && binding.action === 'prompt') {
-        const val = secretValues[binding.name];
+        const val = secretValues[binding.name] || binding.value || '';
         if (binding.required && !val) throw new Error(`必填项 ${binding.name} 未填写`);
-        resolved.cfBinding.text = val || '';
+        resolved.cfBinding.text = val;
       }
       resolvedBindings.push(resolved);
     }
@@ -286,13 +291,7 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
       const { content } = await downloadArtifact(src.url, 'pages');
 
       // Create project if not exists
-      try {
-        await cfFetch(account, `/accounts/${account.account_id}/pages/projects`, encryptionKey, {
-          method: 'POST', body: JSON.stringify({ name, production_branch: 'main' }),
-        });
-      } catch (e: any) {
-        if (!e.body?.includes('already exists') && e.status !== 409) throw e;
-      }
+      await ensurePagesProject(account, encryptionKey, name);
 
       // Set deployment_configs (bindings + env vars) BEFORE deploying, keep `type` for vars.
       // Only set if there's something to set (empty arrays cause API 400 errors).

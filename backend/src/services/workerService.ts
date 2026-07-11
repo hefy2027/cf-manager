@@ -1,24 +1,68 @@
 import { Account } from '../models/account';
 import { getCfClient, getAuthHeaders } from './cfFactory';
 import { proxyFetch, buildCurlCommand } from './proxyService';
+import { fetchScriptSafely } from './ssrfGuard';
 import { getAllZones } from './accountRouter';
 import path from 'path';
 import { File } from 'node:buffer';
 import { blake3 } from 'hash-wasm';
 import { appLogger } from './logger';
+import AdmZip from 'adm-zip';
 
-// Simple MIME type lookup for common web asset types
+// Pages 项目名称校验：Cloudflare 要求 ^[a-z0-9][a-z0-9-]*$
+export function validatePagesProjectName(name: string): boolean {
+  return /^[a-z0-9][a-z0-9-]*$/.test(name);
+}
+
+// 从 zip buffer 解压文件，自动检测并剥离公共顶层目录前缀。
+// 例如所有条目都在 dist/ 下时，返回的 path 会去掉 dist/ 前缀。
+export function extractZipFiles(zipBuffer: Buffer): Array<{ path: string; buffer: Buffer }> {
+  const zip = new AdmZip(zipBuffer);
+  const entries = zip.getEntries().filter(e => !e.isDirectory);
+  const filePaths = entries.map(e => e.entryName.replace(/\\/g, '/'));
+
+  // 检测公共前缀
+  let prefix = '';
+  if (filePaths.length > 0) {
+    const parts = filePaths[0].split('/');
+    if (parts.length > 1) {
+      const candidate = parts[0] + '/';
+      if (filePaths.every(p => p.startsWith(candidate))) {
+        prefix = candidate;
+      }
+    }
+  }
+
+  const files: Array<{ path: string; buffer: Buffer }> = [];
+  for (const entry of entries) {
+    const p = entry.entryName.replace(/\\/g, '/');
+    const finalPath = prefix ? p.slice(prefix.length) : p;
+    if (finalPath) { // 跳过空路径（如前缀目录本身）
+      files.push({ path: finalPath, buffer: entry.getData() });
+    }
+  }
+  return files;
+}
+
+// MIME type lookup — 四步上传法中 contentType 作为 metadata 存入资产存储，
+// Cloudflare 按此值设置响应 Content-Type。若全部返回 octet-stream → 浏览器直接下载。
 function getContentType(filename: string): string {
   const ext = filename.split('.').pop()?.toLowerCase() || '';
   const types: Record<string, string> = {
-    html: 'text/html', htm: 'text/html', css: 'text/css', js: 'application/javascript',
-    mjs: 'application/javascript', json: 'application/json', xml: 'application/xml',
-    txt: 'text/plain', svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg',
-    jpeg: 'image/jpeg', gif: 'image/gif', ico: 'image/x-icon', webp: 'image/webp',
+    html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8',
+    css: 'text/css; charset=utf-8',
+    js: 'application/javascript; charset=utf-8', mjs: 'application/javascript; charset=utf-8',
+    json: 'application/json; charset=utf-8', xml: 'application/xml; charset=utf-8',
+    txt: 'text/plain; charset=utf-8', csv: 'text/csv; charset=utf-8',
+    svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    gif: 'image/gif', ico: 'image/x-icon', webp: 'image/webp', avif: 'image/avif',
+    bmp: 'image/bmp', tiff: 'image/tiff',
     woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf',
-    eot: 'application/vnd.ms-fontobject', mp4: 'video/mp4', webm: 'video/webm',
-    mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav', pdf: 'application/pdf',
-    wasm: 'application/wasm', map: 'application/json',
+    eot: 'application/vnd.ms-fontobject',
+    mp4: 'video/mp4', webm: 'video/webm', ogv: 'video/ogg',
+    mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav', flac: 'audio/flac',
+    pdf: 'application/pdf', wasm: 'application/wasm',
+    map: 'application/json',
   };
   return types[ext] || 'application/octet-stream';
 }
@@ -26,10 +70,20 @@ function getContentType(filename: string): string {
 // 与 wrangler 同款资产哈希（@cloudflare/deploy-helpers 的 hashFile，全链路唯一使用的算法）：
 //   hash = blake3(base64(content) + extension).hex().slice(0, 32)
 // Cloudflare 资产存储按此算法做内容寻址，manifest 的 hash 必须与之匹配，否则运行时按 hash 取内容失败 → 404。
+// async function computePageAssetHash(buffer: Buffer, filePath: string): Promise<string> {
+//   const base64Contents = buffer.toString('base64');
+//   const extension = path.extname(filePath).substring(1);
+//   const fullHash = await blake3(Buffer.from(base64Contents + extension, 'utf8'));
+//   return fullHash.slice(0, 32);
+// }
+
+// 与 wrangler (@cloudflare/deploy-helpers hashFile) 完全一致：
+//   hash = blake3(base64(content) + extension).hex().slice(0, 32)
+// Cloudflare 资产存储按此算法做内容寻址，manifest 的 hash 必须与之匹配，否则运行时按 hash 取内容失败 → 404。
 async function computePageAssetHash(buffer: Buffer, filePath: string): Promise<string> {
   const base64Contents = buffer.toString('base64');
   const extension = path.extname(filePath).substring(1);
-  const fullHash = await blake3(Buffer.from(base64Contents + extension, 'utf8'));
+  const fullHash = await blake3(base64Contents + extension);
   return fullHash.slice(0, 32);
 }
 
@@ -197,13 +251,7 @@ export async function deployWorker(
 export async function deployWorkerFromUrl(
   account: Account, name: string, url: string, options?: DeployWorkerOptions,
 ): Promise<DeployWorkerResult> {
-  const resp = await proxyFetch(url);
-  if (!resp.ok) {
-    const err = new Error(`Failed to fetch JS from URL: ${resp.status} ${resp.statusText}`);
-    (err as any).statusCode = resp.status;
-    throw err;
-  }
-  const scriptContent = await resp.text();
+  const scriptContent = await fetchScriptSafely(url);
   return deployWorker(account, name, scriptContent, options);
 }
 
@@ -619,45 +667,41 @@ export async function getWorkersUsageToday(account: Account): Promise<WorkersUsa
   };
 }
 
-// Pages deployment via the documented Direct Upload contract, entirely through the official SDK.
-//
-// `client.pages.projects.deployments.create` sends a `multipart/form-data` request. The SDK's
-// `createForm` serializes every body field: strings become text fields, and any `Uploadable`
-// (File/Blob/Buffer/ReadStream) becomes a binary file field — exactly matching the curl form
-// `-F "index.html=@dist/index.html"`. So we inline ALL files (regular assets + special files) as
-// `File` fields in the same call that carries the `manifest`, and the SDK handles the multipart
-// serialization for us. No non-public endpoints involved.
+// 确保 Pages 项目存在，已存在时忽略 409 错误
+export async function ensurePagesProject(account: Account, projectName: string): Promise<void> {
+  const accountId = account.account_id;
+  if (!accountId) throw new Error('Account ID is required');
+  const cf = getCfClient(account);
+  try {
+    await cf.pages.projects.create({ account_id: accountId, name: projectName, production_branch: 'main' } as any);
+  } catch (e: any) {
+    if (e?.status !== 409) throw e;  // 409 = already exists, ignore
+  }
+}
+
+// ============ Pages 部署：wrangler 四步上传法 ============
 export async function deployPages(
   account: Account,
   projectName: string,
   files: Array<{ path: string; buffer: Buffer }>,
-  skipCreateProject = false
+  skipCreateProject = false,
 ): Promise<any> {
   const accountId = account.account_id;
   if (!accountId) throw new Error('Account ID is required');
 
+  const authHeaders = getAuthHeaders(account);
   const cf = getCfClient(account);
 
-  // 1. Create project if not exists (skip if skipCreateProject is true)
   if (!skipCreateProject) {
-    try {
-      await cf.pages.projects.create({ account_id: accountId, name: projectName, production_branch: 'main' } as any);
-    } catch (e: any) {
-      if (e?.status !== 409) throw e;  // 409 = already exists, ignore
-    }
+    await ensurePagesProject(account, projectName);
   }
 
-  // 2. If no files, just create/return the (empty) project
   if (!files || files.length === 0) {
-    appLogger.info(`[Pages Deploy] Created empty project: ${projectName}`);
+    appLogger.info(`[Pages Deploy V2] Created empty project: ${projectName}`);
     return await cf.pages.projects.get(projectName, { account_id: accountId! });
   }
 
-  // 3. Normalize paths and separate special files from regular assets.
-  //    Special files are uploaded under their fixed field name (e.g. `_worker.js`); they are NOT
-  //    placed in the manifest. Regular assets are uploaded under their absolute path (leading
-  //    slash, e.g. `/index.html`) and listed in the manifest (path -> content hash), matching
-  //    wrangler's convention where the manifest key is `/${relativePath}`.
+  // 特殊文件：不进 manifest，作为 multipart 字段随 deployment 请求上传（与 wrangler 一致）
   const SPECIAL_FILES = new Set([
     '_worker.js', '_worker.bundle', '_headers', '_redirects', '_routes.json',
     'functions-filepath-routing-config.json',
@@ -676,54 +720,164 @@ export async function deployPages(
     if (!f.path.includes('/') && SPECIAL_FILES.has(basename)) {
       specialFiles.push(f);
     } else {
-      // 普通资源路径加前导斜杠，与 wrangler 的 manifest key 约定一致（"/index.html"）。
-      // 注意：manifest key 与 multipart 字段名都用同一个 f.path，必须保持同步。
-      f.path = '/' + f.path;
       assetFiles.push(f);
     }
   }
 
-  appLogger.info(`[Pages Deploy] Total: ${files.length} files | Assets: ${assetFiles.length} | Special: ${specialFiles.length}`);
+  appLogger.info(`[Pages Deploy V2] Total: ${files.length} files | Assets: ${assetFiles.length} | Special: ${specialFiles.length}`);
 
-  // 4. Build the manifest (relative path -> BLAKE3 content-addressing hash) for regular assets.
-  //    This hash is the key into Pages' asset store, so it must match wrangler's BLAKE3 scheme.
+  // ---- Step 1: 获取 upload JWT ----
+  // wrangler: fetchResult(`/accounts/${accountId}/pages/projects/${projectName}/upload-token`)
+  appLogger.info(`[Pages Deploy V2] Step 1: Fetching upload JWT...`);
+  let jwt: string;
+  {
+    const resp = await proxyFetch(`${CF_BASE}/accounts/${accountId}/pages/projects/${projectName}/upload-token`, {
+      method: 'GET',
+      headers: { ...authHeaders },
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`[Pages Deploy V2] Failed to get upload token: ${resp.status} ${text}`);
+    }
+    const json = await resp.json();
+    jwt = json?.result?.jwt;
+    if (!jwt) throw new Error(`[Pages Deploy V2] Upload token response missing jwt: ${JSON.stringify(json)}`);
+  }
+  appLogger.info(`[Pages Deploy V2] Got upload JWT`);
+
+  // ---- Step 2: 计算 hash + check-missing ----
+  // wrangler: validate() 计算 hash → upload() 内部先 check-missing
+  appLogger.info(`[Pages Deploy V2] Step 2: Computing hashes & checking missing assets...`);
   const manifest: Record<string, string> = {};
-  for (const f of assetFiles) {
-    manifest[f.path] = await computePageAssetHash(f.buffer, f.path);
-  }
-  appLogger.info(`[Pages Deploy] Manifest: ${JSON.stringify(manifest)}`);
+  const hashToFile = new Map<string, { buffer: Buffer; contentType: string }>();
 
-  // 5. Build the SDK body. `DeploymentCreateParams` only types the special files + `manifest`, so we
-  //    use a loose Record and cast at the call site; at runtime `createForm` forwards every field —
-  //    strings as text, `File` values as binary multipart fields (identical to `-F "path=@file"`).
-  const body: Record<string, unknown> = {
-    account_id: accountId,
-    manifest: JSON.stringify(manifest),
-    branch: 'main',
-    commit_hash: 'direct-upload',
-    commit_message: 'Deploy via CF Manager (SDK)',
-    commit_dirty: 'false',
-  };
-
-  // Regular assets: field name = relative path, value = binary File
   for (const f of assetFiles) {
-    body[f.path] = new File([bufferToBlobPart(f.buffer)], f.path, { type: getContentType(f.path) });
+    const manifestKey = '/' + f.path; // wrangler manifest key 以 / 开头
+    const hash = await computePageAssetHash(f.buffer, f.path);
+    manifest[manifestKey] = hash;
+    // 同 hash 的文件只上传一次（内容寻址去重）
+    if (!hashToFile.has(hash)) {
+      hashToFile.set(hash, { buffer: f.buffer, contentType: getContentType(f.path) });
+    }
   }
 
-  // Special files: field name = fixed basename (mutually exclusive where required)
+  const allHashes = [...hashToFile.keys()];
+  appLogger.info(`[Pages Deploy V2] Manifest: ${Object.keys(manifest).length} entries, unique hashes: ${allHashes.length}`);
+
+  let missingHashes: string[];
+  {
+    const resp = await proxyFetch(`${CF_BASE}/pages/assets/check-missing`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${jwt}`,
+      },
+      body: JSON.stringify({ hashes: allHashes }),
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`[Pages Deploy V2] check-missing failed: ${resp.status} ${text}`);
+    }
+    const json = await resp.json();
+    missingHashes = json.result || [];
+  }
+  appLogger.info(`[Pages Deploy V2] Missing assets: ${missingHashes.length}/${allHashes.length} (need upload)`);
+
+  // ---- Step 3: 上传缺失的资源 ----
+  // wrangler: POST /pages/assets/upload, body = [{ key: hash, value: base64(content), metadata: { contentType }, base64: true }]
+  // 分批上传，每批不超过 50 个文件或 ~20MB（wrangler 用 bucket 策略 + 并发 3，这里简化为顺序分批）
+  if (missingHashes.length > 0) {
+    appLogger.info(`[Pages Deploy V2] Step 3: Uploading ${missingHashes.length} missing assets...`);
+    const BATCH_SIZE = 50;
+    const BATCH_BYTES = 20 * 1024 * 1024;
+
+    for (let i = 0; i < missingHashes.length; i += BATCH_SIZE) {
+      const batch = missingHashes.slice(i, i + BATCH_SIZE);
+      const payload: Array<{ key: string; value: string; metadata: { contentType: string }; base64: boolean }> = [];
+      let batchBytes = 0;
+
+      for (const hash of batch) {
+        const fileInfo = hashToFile.get(hash);
+        if (!fileInfo) continue;
+        const base64Content = fileInfo.buffer.toString('base64');
+        batchBytes += base64Content.length;
+        payload.push({
+          key: hash,
+          value: base64Content,
+          metadata: { contentType: fileInfo.contentType },
+          base64: true,
+        });
+      }
+
+      appLogger.info(`[Pages Deploy V2] Uploading batch ${Math.floor(i / BATCH_SIZE) + 1}: ${payload.length} files, ~${Math.round(batchBytes / 1024)}KB`);
+
+      const resp = await proxyFetch(`${CF_BASE}/pages/assets/upload`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${jwt}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(`[Pages Deploy V2] Asset upload failed (batch ${Math.floor(i / BATCH_SIZE) + 1}): ${resp.status} ${text}`);
+      }
+
+      // 超过单批大小限制时提前进入下一批（防止 payload 过大）
+      if (batchBytes >= BATCH_BYTES) {
+        appLogger.info(`[Pages Deploy V2] Batch exceeded ${BATCH_BYTES / 1024 / 1024}MB limit, continuing to next batch`);
+      }
+    }
+
+    // upsert-hashes：注册已上传的 hash，加速下次部署（非致命，失败仅告警）
+    // wrangler: POST /pages/assets/upsert-hashes, body = { hashes: [...] }
+    try {
+      await proxyFetch(`${CF_BASE}/pages/assets/upsert-hashes`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${jwt}`,
+        },
+        body: JSON.stringify({ hashes: allHashes }),
+      });
+    } catch (e: any) {
+      appLogger.warn(`[Pages Deploy V2] upsert-hashes failed (non-fatal): ${e.message}`);
+    }
+  }
+
+  // ---- Step 4: 创建 deployment ----
+  // wrangler: POST /accounts/{accountId}/pages/projects/{projectName}/deployments
+  // FormData: manifest(JSON string) + branch + commit_message + commit_hash + commit_dirty + [特殊文件]
+  // 注意：普通资源文件不在此请求中，它们已通过 /pages/assets/upload 上传
+  appLogger.info(`[Pages Deploy V2] Step 4: Creating deployment...`);
+  const formData = new FormData();
+  formData.append('manifest', JSON.stringify(manifest));
+  formData.append('branch', 'main');
+  formData.append('commit_message', 'Deploy via CF Manager');
+  formData.append('commit_hash', 'direct-upload');
+  formData.append('commit_dirty', 'false');
+
   for (const f of specialFiles) {
     const basename = f.path.split('/').pop() || f.path;
-    body[basename] = new File([bufferToBlobPart(f.buffer)], basename, { type: getContentType(f.path) });
-    appLogger.info(`[Pages Deploy] Special file: ${basename} (${f.buffer.length} bytes)`);
+    formData.append(basename, new File([bufferToBlobPart(f.buffer)], basename, { type: getContentType(f.path) }));
+    appLogger.info(`[Pages Deploy V2] Special file: ${basename} (${f.buffer.length} bytes)`);
   }
 
-  // 6. One call: inline all bytes + manifest → deployment. No intermediate asset upload needed.
-  appLogger.info(`[Pages Deploy] Creating deployment via SDK | manifest entries: ${assetFiles.length} | special files: ${specialFiles.length}`);
-  const depResult: any = await cf.pages.projects.deployments.create(projectName, body as any);
+  appLogger.info(`[Pages Deploy V2] POST deployments | manifest: ${Object.keys(manifest).length} entries | special: ${specialFiles.length}`);
+  // FormData 请求使用原生 fetch（与 deployWorker 一致，避免 node-fetch v2 对原生 FormData 的兼容问题）
+  const deployResp = await fetch(`${CF_BASE}/accounts/${accountId}/pages/projects/${projectName}/deployments`, {
+    method: 'POST',
+    headers: { ...authHeaders },
+    body: formData,
+  });
+  const deployJson = await deployResp.json() as any;
+  if (!deployResp.ok || !deployJson.success) {
+    throw new Error(`[Pages Deploy V2] Deployment failed: ${deployResp.status} ${JSON.stringify(deployJson)}`);
+  }
 
-  appLogger.info(`[Pages Deploy] Deployment created: ${depResult?.url || '(no url)'}`);
-  appLogger.info(`[Pages Deploy] Deployment env: ${depResult?.environment} | id: ${depResult?.id}`);
-  appLogger.info(`[Pages Deploy] Deployment env_vars: ${JSON.stringify(depResult?.env_vars || {})}`);
-  appLogger.info(`[Pages Deploy] Deployment kv_namespaces: ${JSON.stringify(depResult?.kv_namespaces || 'none')}`);
+  const depResult = deployJson.result;
+  appLogger.info(`[Pages Deploy V2] Deployment created: ${depResult?.url || '(no url)'}`);
+  appLogger.info(`[Pages Deploy V2] Deployment env: ${depResult?.environment} | id: ${depResult?.id}`);
   return depResult;
 }
