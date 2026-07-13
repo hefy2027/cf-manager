@@ -188,10 +188,10 @@ const hasActiveFilter = computed(
   () => !!searchText.value || !!selectedType.value || selectedTags.value.length > 0 || favOnly.value,
 );
 
-// 源仓库地址：优先用 author.url，其次从 readmeBaseUrl（raw.githubusercontent）推断
+// 源仓库地址：优先用 homepage，其次从 readmeBaseUrl（raw.githubusercontent）推断
 const sourceRepoUrl = computed(() => {
-  const authorUrl = detailItem.value?.template.author?.url;
-  if (authorUrl) return authorUrl;
+  const homepage = detailItem.value?.template.homepage;
+  if (homepage) return homepage;
   const m = readmeBaseUrl.value.match(/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\//);
   return m ? `https://github.com/${m[1]}/${m[2]}` : '';
 });
@@ -284,9 +284,9 @@ async function loadTemplates(force = false) {
 }
 
 // 从 GitHub 仓库地址推断 README 原始地址（支持 main/master 分支回退）
-function githubReadmeCandidates(authorUrl?: string): string[] {
-  if (!authorUrl) return [];
-  const m = authorUrl.match(/github\.com\/([^/\s]+)\/([^/\s]+)/i);
+function githubReadmeCandidates(url?: string): string[] {
+  if (!url) return [];
+  const m = url.match(/github\.com\/([^/\s]+)\/([^/\s]+)/i);
   if (!m) return [];
   const owner = m[1];
   const repo = m[2].replace(/\.git$/i, '');
@@ -301,12 +301,19 @@ async function showDetail(item: TemplateItem) {
   readmeBaseUrl.value = '';
   readmeLoading.value = true;
   try {
-    // 优先使用 catalog 配置的 readmeUrl；未配置时根据 author.url 从 GitHub 拉取
+    // 优先使用 catalog 配置的 readmeUrl；未配置时从 homepage / source.url 推断
     const urls: string[] = [];
     if (item.template.readmeUrl) {
       urls.push(item.template.readmeUrl);
     } else {
-      urls.push(...githubReadmeCandidates(item.template.author?.url));
+      const repoCandidates = githubReadmeCandidates(
+        item.template.homepage || item.template.source?.url,
+      );
+      urls.push(...repoCandidates);
+      // 如果上面没匹配到，再用 author.url 补试
+      if (repoCandidates.length === 0 && item.template.author?.url) {
+        urls.push(...githubReadmeCandidates(item.template.author?.url));
+      }
     }
     for (const url of urls) {
       try {

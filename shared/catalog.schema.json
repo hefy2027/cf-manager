@@ -25,11 +25,12 @@
   "$defs": {
     "source": {
       "type": "object",
+      "description": "部署源码来源。kind 决定拉取方式，url 为实际拉取地址",
       "required": ["kind", "url"],
       "additionalProperties": false,
       "properties": {
-        "kind": { "enum": ["raw", "release", "repo-archive"] },
-        "url": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "kind": { "enum": ["raw", "release", "repo-archive"], "description": "部署源码类型：raw 为单文件直链，release 为 GitHub Release 附件，repo-archive 为仓库 ZIP 归档" },
+        "url": { "type": "string", "format": "uri", "pattern": "^https://", "description": "部署源码拉取地址。部署时从此处拉取代码；当 homepage 未填时，兜底作为仓库入口" },
         "assetName": { "type": "string" },
         "subPath": { "type": "string" },
         "size": { "type": "number" }
@@ -73,22 +74,24 @@
         "description": { "type": "string" },
         "author": {
           "type": "object",
+          "description": "作者信息。卡片/详情展示作者时使用 author.name 作为显示名，author.url 作为作者名链接",
           "required": ["name"],
           "additionalProperties": false,
           "properties": {
-            "name": { "type": "string" },
-            "url": { "type": "string", "format": "uri" }
+            "name": { "type": "string", "description": "作者显示名" },
+            "url": { "type": "string", "format": "uri", "description": "作者个人主页" }
           }
         },
         "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
         "tags": { "type": "array", "items": { "type": "string" } },
         "icon": { "type": "string" },
-        "homepage": { "type": "string", "format": "uri" },
-        "readmeUrl": { "type": "string", "format": "uri" },
+        "homepage": { "type": "string", "format": "uri", "description": "项目主页/仓库地址。前端用于「访问仓库」按钮及详情页「前往源仓库」链接" },
+        "readmeUrl": { "type": "string", "format": "uri", "description": "README 原始内容地址（如 raw.githubusercontent.com），详情页加载 README 时使用" },
         "type": { "enum": ["worker", "pages", "hybrid"] },
-        "source": { "$ref": "#/$defs/source" },
+        "source": { "$ref": "#/$defs/source", "description": "部署源码（非 hybrid 类型使用）。当 homepage 未填时，source.url 兜底作为仓库入口" },
         "sources": {
           "type": "object",
+          "description": "hybrid 类型的部署源码集合，同时包含 worker 和/或 pages 源",
           "minProperties": 1,
           "additionalProperties": false,
           "properties": {

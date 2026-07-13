@@ -51,7 +51,18 @@
           <template v-else>by {{ item.template.author?.name || 'unknown' }}</template>
           <n-tag size="tiny" round class="ver-tag">{{ item.template.version }}</n-tag>
         </span>
-        <n-button size="tiny" type="primary" @click.stop="emit('deploy', item)">部署</n-button>
+        <n-space :size="6">
+          <n-button
+            v-if="repoUrl"
+            size="tiny"
+            tertiary
+            @click.stop="openRepo"
+          >
+            <template #icon><n-icon :component="LogoGithub" /></template>
+            仓库
+          </n-button>
+          <n-button size="tiny" type="primary" @click.stop="emit('deploy', item)">部署</n-button>
+        </n-space>
       </n-space>
     </template>
   </n-card>
@@ -60,6 +71,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { Star, StarOutline } from '@vicons/ionicons5';
+import { LogoGithub } from '@vicons/ionicons5';
 import type { CatalogBindingType, TemplateItem } from '../../types/store';
 import { isFav } from '../../utils/favorites';
 
@@ -71,6 +83,21 @@ const emit = defineEmits<{
 }>();
 
 const faved = computed(() => isFav(props.item));
+
+const repoUrl = computed(() => {
+  return (
+    props.item.template.author?.url ||
+    props.item.template.homepage ||
+    props.item.template.source?.url ||
+    ''
+  );
+});
+
+function openRepo() {
+  if (repoUrl.value) {
+    window.open(repoUrl.value, '_blank', 'noopener,noreferrer');
+  }
+}
 
 const isIconUrl = computed(() =>
   /^(https?:|data:)/.test(props.item.template.icon || ''),
