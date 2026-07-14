@@ -91,42 +91,64 @@ jobs:
         run: |
           DB_NAME="${{ github.event.inputs.d1_database_name }}"
 
-          # 查询已有数据库（--json + jq 按 name 精确匹配，避免误匹配子串/脆弱的 grep 正则）
-          DB_LIST=$(wrangler d1 list --json 2>/dev/null || echo "[]")
-          echo "$DB_LIST" | jq -r '.[]? | "\(.name)\t\(.uuid // .id)"' 2>/dev/null | head -10 || true
+          # Account ID：优先复用前面解析的，否则回退 whoami
+          ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID"
+          if [ -z "$ACCOUNT_ID" ]; then
+            ACCOUNT_ID=$(wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1 || echo "")
+            echo "CLOUDFLARE_ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
+          fi
+          if [ -z "$ACCOUNT_ID" ]; then
+            echo "WARNING: 无法解析 Account ID，D1 操作可能失败"
+          fi
 
-          # --- 完全覆盖：删除旧数据库（按 uuid） ---
+          # 用 CF REST API 查询 D1 列表（绕开 wrangler d1 list --json 在 4.x 的兼容性问题）
+          list_d1() {
+            curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/d1/database" \
+              -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
+              -H "X-Auth-Key: $CLOUDFLARE_API_KEY"
+          }
+          DB_LIST=$(list_d1)
+          echo "$DB_LIST" | jq -r '.result[]? | "\(.name)\t\(.uuid)"' 2>/dev/null | head -10 || echo "$DB_LIST"
+
+          # 按 name 精确匹配取 uuid
+          get_db_id() {
+            echo "$1" | jq -r --arg name "$2" '.result[]? | select(.name==$name) | .uuid' 2>/dev/null | head -1
+          }
+
+          # --- 完全覆盖：删除旧数据库 ---
           if [ "${{ github.event.inputs.full_wipe }}" = "true" ]; then
             echo "完全覆盖模式：尝试删除旧 D1 数据库..."
-            DB_OLD_ID=$(echo "$DB_LIST" | jq -r --arg name "$DB_NAME" '.[]? | select(.name==$name) | (.uuid // .id)' 2>/dev/null | head -1 || echo "")
+            DB_OLD_ID=$(get_db_id "$DB_LIST" "$DB_NAME")
             if [ -n "$DB_OLD_ID" ]; then
               echo "找到数据库 ID: $DB_OLD_ID，正在删除..."
-              wrangler d1 delete "$DB_OLD_ID" -y 2>&1 || echo "按 ID 删除失败，尝试按名称删除..."
+              curl -s -X DELETE "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/d1/database/$DB_OLD_ID" \
+                -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
+                -H "X-Auth-Key: $CLOUDFLARE_API_KEY" >/dev/null
               sleep 3
-              # 删除后确认是否已消失，否则按名称兜底删除
-              DB_LIST2=$(wrangler d1 list --json 2>/dev/null || echo "[]")
-              DB_STILL=$(echo "$DB_LIST2" | jq -r --arg name "$DB_NAME" '.[]? | select(.name==$name) | (.uuid // .id)' 2>/dev/null | head -1 || echo "")
+              # 确认是否已消失
+              DB_LIST2=$(list_d1)
+              DB_STILL=$(get_db_id "$DB_LIST2" "$DB_NAME")
               if [ -n "$DB_STILL" ]; then
-                echo "按 ID 删除未生效，尝试按名称删除..."
+                echo "API 删除未生效，尝试 wrangler 按名称删除..."
                 wrangler d1 delete "$DB_NAME" -y 2>&1 || echo "删除失败，继续"
                 sleep 2
               fi
             else
-              echo "未在列表中匹配到数据库，尝试按名称删除..."
+              echo "未在列表中匹配到数据库，尝试 wrangler 按名称删除..."
               wrangler d1 delete "$DB_NAME" -y 2>&1 || echo "数据库可能不存在或已被删除"
               sleep 2
             fi
+            # 删除后重新拉取列表
+            DB_LIST=$(list_d1)
           fi
 
-          # 重新获取数据库 ID
-          DB_LIST=$(wrangler d1 list --json 2>/dev/null || echo "[]")
-          DB_ID=$(echo "$DB_LIST" | jq -r --arg name "$DB_NAME" '.[]? | select(.name==$name) | (.uuid // .id)' 2>/dev/null | head -1 || echo "")
+          DB_ID=$(get_db_id "$DB_LIST" "$DB_NAME")
 
           if [ -z "$DB_ID" ]; then
             echo "Creating D1 database: $DB_NAME"
             wrangler d1 create "$DB_NAME"
-            DB_LIST2=$(wrangler d1 list --json 2>/dev/null || echo "[]")
-            DB_ID=$(echo "$DB_LIST2" | jq -r --arg name "$DB_NAME" '.[]? | select(.name==$name) | (.uuid // .id)' 2>/dev/null | head -1 || echo "")
+            DB_LIST2=$(list_d1)
+            DB_ID=$(get_db_id "$DB_LIST2" "$DB_NAME")
             echo "Created database with ID: $DB_ID"
 
             echo "Initializing database schema..."
@@ -190,36 +212,54 @@ jobs:
         run: |
           KV_NAME="${{ github.event.inputs.kv_namespace_name }}"
 
-          # 查询已有 namespace（--json + jq 按 title 精确匹配，避免误取 preview_id 或其它 namespace）
-          KV_LIST_FULL=$(wrangler kv namespace list --json 2>/dev/null || echo "[]")
+          # Account ID：优先复用前面解析的，否则回退 whoami（legacy 认证）
+          ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID"
+          if [ -z "$ACCOUNT_ID" ]; then
+            ACCOUNT_ID=$(wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1 || echo "")
+            echo "CLOUDFLARE_ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
+          fi
+          if [ -z "$ACCOUNT_ID" ]; then
+            echo "WARNING: 无法解析 Account ID，KV 操作可能失败"
+          fi
 
-          # --- 完全覆盖：清空 KV ---
+          # 用 CF REST API 查询（绕开 wrangler kv namespace list --json 在 4.x 的兼容性问题，
+          # 同时保证 account 上下文与后续 wrangler 调用一致）
+          list_kv() {
+            curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/storage/kv/namespaces" \
+              -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
+              -H "X-Auth-Key: $CLOUDFLARE_API_KEY"
+          }
+          KV_LIST_FULL=$(list_kv)
+
+          # --- 完全覆盖：删除同名 namespace ---
           if [ "${{ github.event.inputs.full_wipe }}" = "true" ]; then
             echo "完全覆盖模式：清空 KV 命名空间..."
-            KV_OLD_ID=$(echo "$KV_LIST_FULL" | jq -r --arg name "$KV_NAME" '.[]? | select(.title==$name) | .id' 2>/dev/null | head -1 || echo "")
+            KV_OLD_ID=$(echo "$KV_LIST_FULL" | jq -r --arg name "$KV_NAME" '.result[]? | select(.title==$name) | .id' 2>/dev/null | head -1 || echo "")
             if [ -n "$KV_OLD_ID" ]; then
               echo "删除旧 KV namespace: $KV_OLD_ID"
-              wrangler kv namespace delete --namespace-id "$KV_OLD_ID" -y || true
+              curl -s -X DELETE "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/storage/kv/namespaces/$KV_OLD_ID" \
+                -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
+                -H "X-Auth-Key: $CLOUDFLARE_API_KEY" >/dev/null
               echo "等待删除生效..."
               sleep 5
             else
               echo "未找到同名 KV namespace，跳过删除"
             fi
             # 删除后重新拉取列表
-            KV_LIST_FULL=$(wrangler kv namespace list --json 2>/dev/null || echo "[]")
+            KV_LIST_FULL=$(list_kv)
           fi
 
           echo "=== 查询已有 KV namespace ==="
-          echo "$KV_LIST_FULL"
+          echo "$KV_LIST_FULL" | jq -r '.result[]? | "\(.title)\t\(.id)"' 2>/dev/null || echo "$KV_LIST_FULL"
 
-          KV_ID=$(echo "$KV_LIST_FULL" | jq -r --arg name "$KV_NAME" '.[]? | select(.title==$name) | .id' 2>/dev/null | head -1 || echo "")
+          KV_ID=$(echo "$KV_LIST_FULL" | jq -r --arg name "$KV_NAME" '.result[]? | select(.title==$name) | .id' 2>/dev/null | head -1 || echo "")
 
           if [ -z "$KV_ID" ]; then
             echo "未找到已有 namespace，尝试创建..."
             wrangler kv namespace create "$KV_NAME" 2>&1 || true
-            # 创建后重新查询（兼容「已存在」等情况）
-            KV_LIST_FULL=$(wrangler kv namespace list --json 2>/dev/null || echo "[]")
-            KV_ID=$(echo "$KV_LIST_FULL" | jq -r --arg name "$KV_NAME" '.[]? | select(.title==$name) | .id' 2>/dev/null | head -1 || echo "")
+            # 创建后重新查询（兼容「已存在」冲突：用 API 回退拿到已有 ID，而非直接失败）
+            KV_LIST_FULL=$(list_kv)
+            KV_ID=$(echo "$KV_LIST_FULL" | jq -r --arg name "$KV_NAME" '.result[]? | select(.title==$name) | .id' 2>/dev/null | head -1 || echo "")
           fi
 
           if [ -z "$KV_ID" ]; then
