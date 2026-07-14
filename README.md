@@ -92,13 +92,18 @@
 
 无需安装任何工具，全程在浏览器中完成。
 
+**推荐：使用 Secrets 版本（敏感信息不泄露到日志）**
+
 1. **Fork 本仓库** → 点击右上角 Fork
-2. 进入你 Fork 的仓库 → **Actions** → 选择 **Deploy to Cloudflare Pages**
-3. 点击 **Run workflow**，填入：
-   - `cf_api_key`：你的 Cloudflare Global API Key
-   - `cf_email`：你的 Cloudflare 账号邮箱
-   - 其他保持默认即可
+2. 进入 Fork 仓库 → **Settings** → **Secrets and variables** → **Actions**，创建 4 个 secret：
+   - `CF_API_KEY`：Cloudflare Global API Key
+   - `CF_EMAIL`：Cloudflare 账号邮箱
+   - `ENCRYPTION_KEY`：加密密钥（可填 `cfmgrbest`）
+   - `API_SECRET`：访问密码（可填 `cfmgrbest`）
+3. 进入 **Actions** → 选择 **Deploy to Cloudflare Pages (Secrets)** → **Run workflow**
 4. 等待部署完成，访问 `https://cfmgr.pages.dev/admin/`
+
+> 也可使用 **Deploy to Cloudflare Pages**（手动输入版本），但敏感值会在日志第一步短暂暴露。
 
 > Cloudflare Global API Key 获取：[Cloudflare Dashboard](https://dash.cloudflare.com/profile/api-tokens) → API Keys → Global API Key → View
 
