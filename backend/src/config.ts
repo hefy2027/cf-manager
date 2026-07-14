@@ -1,5 +1,9 @@
 import path from 'path';
 
+// Load .env from project root so encryption key stays stable across restarts
+import { config as dotenvConfig } from 'dotenv';
+dotenvConfig({ path: path.join(__dirname, '..', '..', '.env') });
+
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
   encryptionKey: process.env.ENCRYPTION_KEY || 'feiyu',
