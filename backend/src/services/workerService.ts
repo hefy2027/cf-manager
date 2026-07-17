@@ -5,87 +5,16 @@ import { fetchScriptSafely } from './ssrfGuard';
 import { getAllZones } from './accountRouter';
 import path from 'path';
 import { File } from 'node:buffer';
-import { blake3 } from 'hash-wasm';
 import { appLogger } from './logger';
-import AdmZip from 'adm-zip';
+import { computeStaticAssetHash, getContentType, extractZipFiles } from './staticAssets';
+export { extractZipFiles };
 
 // Pages 项目名称校验：Cloudflare 要求 ^[a-z0-9][a-z0-9-]*$
 export function validatePagesProjectName(name: string): boolean {
   return /^[a-z0-9][a-z0-9-]*$/.test(name);
 }
 
-// 从 zip buffer 解压文件，自动检测并剥离公共顶层目录前缀。
-// 例如所有条目都在 dist/ 下时，返回的 path 会去掉 dist/ 前缀。
-export function extractZipFiles(zipBuffer: Buffer): Array<{ path: string; buffer: Buffer }> {
-  const zip = new AdmZip(zipBuffer);
-  const entries = zip.getEntries().filter(e => !e.isDirectory);
-  const filePaths = entries.map(e => e.entryName.replace(/\\/g, '/'));
 
-  // 检测公共前缀
-  let prefix = '';
-  if (filePaths.length > 0) {
-    const parts = filePaths[0].split('/');
-    if (parts.length > 1) {
-      const candidate = parts[0] + '/';
-      if (filePaths.every(p => p.startsWith(candidate))) {
-        prefix = candidate;
-      }
-    }
-  }
-
-  const files: Array<{ path: string; buffer: Buffer }> = [];
-  for (const entry of entries) {
-    const p = entry.entryName.replace(/\\/g, '/');
-    const finalPath = prefix ? p.slice(prefix.length) : p;
-    if (finalPath) { // 跳过空路径（如前缀目录本身）
-      files.push({ path: finalPath, buffer: entry.getData() });
-    }
-  }
-  return files;
-}
-
-// MIME type lookup — 四步上传法中 contentType 作为 metadata 存入资产存储，
-// Cloudflare 按此值设置响应 Content-Type。若全部返回 octet-stream → 浏览器直接下载。
-function getContentType(filename: string): string {
-  const ext = filename.split('.').pop()?.toLowerCase() || '';
-  const types: Record<string, string> = {
-    html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8',
-    css: 'text/css; charset=utf-8',
-    js: 'application/javascript; charset=utf-8', mjs: 'application/javascript; charset=utf-8',
-    json: 'application/json; charset=utf-8', xml: 'application/xml; charset=utf-8',
-    txt: 'text/plain; charset=utf-8', csv: 'text/csv; charset=utf-8',
-    svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
-    gif: 'image/gif', ico: 'image/x-icon', webp: 'image/webp', avif: 'image/avif',
-    bmp: 'image/bmp', tiff: 'image/tiff',
-    woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf',
-    eot: 'application/vnd.ms-fontobject',
-    mp4: 'video/mp4', webm: 'video/webm', ogv: 'video/ogg',
-    mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav', flac: 'audio/flac',
-    pdf: 'application/pdf', wasm: 'application/wasm',
-    map: 'application/json',
-  };
-  return types[ext] || 'application/octet-stream';
-}
-
-// 与 wrangler 同款资产哈希（@cloudflare/deploy-helpers 的 hashFile，全链路唯一使用的算法）：
-//   hash = blake3(base64(content) + extension).hex().slice(0, 32)
-// Cloudflare 资产存储按此算法做内容寻址，manifest 的 hash 必须与之匹配，否则运行时按 hash 取内容失败 → 404。
-// async function computePageAssetHash(buffer: Buffer, filePath: string): Promise<string> {
-//   const base64Contents = buffer.toString('base64');
-//   const extension = path.extname(filePath).substring(1);
-//   const fullHash = await blake3(Buffer.from(base64Contents + extension, 'utf8'));
-//   return fullHash.slice(0, 32);
-// }
-
-// 与 wrangler (@cloudflare/deploy-helpers hashFile) 完全一致：
-//   hash = blake3(base64(content) + extension).hex().slice(0, 32)
-// Cloudflare 资产存储按此算法做内容寻址，manifest 的 hash 必须与之匹配，否则运行时按 hash 取内容失败 → 404。
-async function computePageAssetHash(buffer: Buffer, filePath: string): Promise<string> {
-  const base64Contents = buffer.toString('base64');
-  const extension = path.extname(filePath).substring(1);
-  const fullHash = await blake3(base64Contents + extension);
-  return fullHash.slice(0, 32);
-}
 
 // Node `Buffer` is not directly assignable to the DOM `BlobPart` type under strict mode
 // (its backing store is typed as `ArrayBufferLike`, which may be a `SharedArrayBuffer`).
@@ -112,6 +41,25 @@ export interface DeployWorkerOptions {
   enableSubdomain?: boolean;
   createDeployment?: boolean;
   deploymentAnnotation?: Record<string, string>;
+}
+
+// Worker with Assets 的静态资源来源（复用 catalog 的 #/$defs/source 形态）。
+export interface WorkerAssetsInput {
+  source: { kind: string; url: string; assetName?: string; subPath?: string };
+  binding?: string;
+  config?: { html_handling?: string; not_found_handling?: string };
+}
+
+// 构造 Workers Assets manifest：路径以 "/" 开头，hash 与后端/Worker 资产算法一致。
+export async function buildAssetsManifest(
+  files: Array<{ path: string; buffer: Buffer }>,
+): Promise<Record<string, { hash: string; size: number }>> {
+  const manifest: Record<string, { hash: string; size: number }> = {};
+  for (const f of files) {
+    const key = '/' + f.path.replace(/\\/g, '/').replace(/^\/+/, '');
+    manifest[key] = { hash: await computeStaticAssetHash(f.buffer, f.path), size: f.buffer.length };
+  }
+  return manifest;
 }
 
 export interface DeployWorkerResult {
@@ -168,11 +116,56 @@ async function getAccountSubdomain(account: Account): Promise<string> {
   }
 }
 
+// 三阶段上传 Worker 静态资源（与 wrangler 同款）：
+//   1) POST .../assets-upload-session 拿 upload jwt
+//   2) POST .../workers/assets/upload?base64=true 多 part 上传（field=hash, value=base64）
+//   3) 返回 completion jwt，挂到 metadata.assets.jwt
+async function deployWorkerAssets(
+  account: Account,
+  scriptName: string,
+  files: Array<{ path: string; buffer: Buffer }>,
+): Promise<{ jwt: string }> {
+  const authHeaders = getAuthHeaders(account);
+  const accountId = account.account_id!;
+
+  const sessionResp = await fetch(`${CF_BASE}/accounts/${accountId}/workers/scripts/${scriptName}/assets-upload-session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
+    body: JSON.stringify({ manifest: await buildAssetsManifest(files) }),
+  });
+  const sessionJson = await sessionResp.json() as any;
+  if (!sessionResp.ok || !sessionJson.success) throw new Error(`assets-upload-session failed: ${sessionResp.status} ${JSON.stringify(sessionJson)}`);
+  const uploadJwt: string = sessionJson.result.jwt;
+
+  const upForm = new FormData();
+  for (const f of files) {
+    const hash = await computeStaticAssetHash(f.buffer, f.path);
+    upForm.append(hash, new Blob([f.buffer.toString('base64')], { type: 'application/octet-stream' }), hash);
+  }
+  const upResp = await fetch(`${CF_BASE}/accounts/${accountId}/workers/assets/upload?base64=true`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${uploadJwt}` },
+    body: upForm,
+  });
+  if (!upResp.ok) { const txt = await upResp.text(); throw new Error(`assets upload failed: ${upResp.status} ${txt}`); }
+  const upJson = await upResp.json() as any;
+  const completionJwt: string = upJson.jwt ?? upJson.result?.jwt;
+  if (!completionJwt) throw new Error(`assets upload response missing jwt: ${JSON.stringify(upJson)}`);
+  return { jwt: completionJwt };
+}
+
+// 下载 assets 产物（zip 或 raw 单文件），与 catalogDeploy 的 downloadArtifact 同源。
+async function downloadArtifactForAssets(src: WorkerAssetsInput['source']): Promise<Buffer> {
+  const resp = await proxyFetch(src.url, {}, 30000);
+  if (!resp.ok) throw new Error(`assets 产物下载失败: ${resp.status}`);
+  return Buffer.from(await resp.arrayBuffer());
+}
+
 export async function deployWorker(
   account: Account,
   name: string,
   scriptContent: string | Buffer,
-  options?: DeployWorkerOptions,
+  options?: DeployWorkerOptions & { assets?: WorkerAssetsInput; assetsBuffer?: Buffer },
 ): Promise<DeployWorkerResult> {
   const accountId = account.account_id;
   if (!accountId) throw new Error('Account ID is required');
@@ -194,6 +187,19 @@ export async function deployWorker(
       ...(metadata.bindings || []),
       ...Object.entries(options.env).map(([k, v]) => ({ type: 'plain_text', name: k, text: v })),
     ];
+  }
+
+  // Worker with Assets：可选静态资源三阶段上传，并注入 ASSETS 绑定（默认 ASSETS，可覆盖）。
+  if (options?.assets) {
+    const assetContent: Buffer = options.assetsBuffer
+      ? options.assetsBuffer
+      : await downloadArtifactForAssets(options.assets.source);
+    const assetFiles = options.assets.source.kind === 'raw'
+      ? [{ path: options.assets.source.url.split('/').pop() || 'asset', buffer: assetContent }]
+      : extractZipFiles(assetContent);
+    const { jwt } = await deployWorkerAssets(account, name, assetFiles);
+    metadata.assets = { jwt, config: options.assets.config || undefined };
+    metadata.bindings = [...(metadata.bindings || []), { name: options.assets.binding || 'ASSETS', type: 'assets' }];
   }
 
   // Convert content to Uint8Array for Blob (handles both string and Buffer)
@@ -249,7 +255,7 @@ export async function deployWorker(
 
 // Deploy worker from URL: fetch JS from remote URL then upload
 export async function deployWorkerFromUrl(
-  account: Account, name: string, url: string, options?: DeployWorkerOptions,
+  account: Account, name: string, url: string, options?: DeployWorkerOptions & { assets?: WorkerAssetsInput; assetsBuffer?: Buffer },
 ): Promise<DeployWorkerResult> {
   const scriptContent = await fetchScriptSafely(url);
   return deployWorker(account, name, scriptContent, options);
@@ -349,7 +355,13 @@ export async function deleteDomain(account: Account, domainId: string): Promise<
 export async function getSubdomain(account: Account, scriptName: string): Promise<any> {
   const accountId = account.account_id;
   const cf = getCfClient(account);
-  return await cf.workers.scripts.subdomain.get(scriptName, { account_id: accountId! });
+  const raw: any = await cf.workers.scripts.subdomain.get(scriptName, { account_id: accountId! });
+  // 额外拉取账户级 workers.dev 子域名，供前端拼出完整 URL：https://<script>.<accountSubdomain>.workers.dev
+  const accountSubdomain = await getAccountSubdomain(account);
+  const enabled = raw?.enabled;
+  const previews_enabled = raw?.previews_enabled;
+  const url = accountSubdomain ? `https://${scriptName}.${accountSubdomain}.workers.dev` : '';
+  return { enabled, previews_enabled, accountSubdomain, url };
 }
 
 export async function setSubdomain(account: Account, scriptName: string, enabled: boolean): Promise<any> {
@@ -796,7 +808,7 @@ export async function deployPages(
 
   for (const f of assetFiles) {
     const manifestKey = '/' + f.path; // wrangler manifest key 以 / 开头
-    const hash = await computePageAssetHash(f.buffer, f.path);
+    const hash = await computeStaticAssetHash(f.buffer, f.path);
     manifest[manifestKey] = hash;
     // 同 hash 的文件只上传一次（内容寻址去重）
     if (!hashToFile.has(hash)) {

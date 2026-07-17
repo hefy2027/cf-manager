@@ -5,7 +5,7 @@ import { createAuditLog } from '../models/auditLog';
 import { appLogger } from '../services/logger';
 import { getAccountOr404, demoDestructiveGuard } from './routeUtils';
 import {
-  listWorkers, listPages, deployWorker, deployWorkerFromUrl, deleteWorker, deletePagesProject, getWorkerLogs, deployPages,
+  listWorkers, listPages, deployWorker, deployWorkerFromUrl, deleteWorker, deletePagesProject, getWorkerLogs, deployPages, WorkerAssetsInput,
   extractZipFiles, validatePagesProjectName,
   // Secrets
   listSecrets, updateSecret, deleteSecret,
@@ -32,13 +32,28 @@ import {
 } from '../services/workerService';
 import { getAllZones } from '../services/accountRouter';
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1 * 1024 * 1024 } });
+// 手动/批量 Worker 部署：script + 可选 assets（zip 可能较大，放宽到 50MB，与 Pages 一致）
+const uploadWorkerAssets = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024, fields: 10 },
+});
 // Pages 部署：单文件 50MB，最多 100 个文件，总上传限制 200MB
 const uploadPages = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024, files: 100, fields: 10, fieldSize: 1024 * 1024 },
 });
 const router = Router();
+
+// 由上传的 assets 文件构造 deployWorker 的 assets 选项（默认 ASSETS 绑定、无 config）。
+// 单文件当 raw 处理，.zip 当压缩包解包处理。
+function toAssetsOptions(file?: Express.Multer.File): { assets: WorkerAssetsInput; assetsBuffer: Buffer } | undefined {
+  if (!file) return undefined;
+  const isZip = file.originalname.toLowerCase().endsWith('.zip');
+  return {
+    assets: { source: { kind: isZip ? 'zip' : 'raw', url: file.originalname } },
+    assetsBuffer: file.buffer,
+  };
+}
 
 // 演示账户：拦截所有销毁/删除类操作（DELETE 等）
 router.use(demoDestructiveGuard);
@@ -78,20 +93,24 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
 });
 
 // ============ Deploy / Delete ============
-router.post('/:accountId/workers', upload.single('script'), async (req: Request, res: Response, next: NextFunction) => {
+router.post('/:accountId/workers', uploadWorkerAssets.fields([{ name: 'script' }, { name: 'assets' }]), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const account = getAccountOr404(req, res);
     if (!account) return;
     const name = req.body.name as string;
     if (!name) { res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Worker name is required' } }); return; }
+    const files = req.files as { script?: Express.Multer.File[]; assets?: Express.Multer.File[] };
+    const scriptFile = files.script?.[0];
+    const assetsFile = files.assets?.[0];
+    const assetsOpts = toAssetsOptions(assetsFile);
     // Support both file upload and URL
     if (req.body.url) {
-      const { script } = await deployWorkerFromUrl(account, name, req.body.url);
-      createAuditLog(account.id, 'deploy_worker', name, `from_url=${req.body.url}`, 'success');
+      const { script } = await deployWorkerFromUrl(account, name, req.body.url, assetsOpts);
+      createAuditLog(account.id, 'deploy_worker', name, `from_url=${req.body.url}${assetsOpts ? ',with_assets' : ''}`, 'success');
       res.status(201).json(script);
-    } else if (req.file) {
-      const { script } = await deployWorker(account, name, req.file.buffer.toString('utf-8'));
-      createAuditLog(account.id, 'deploy_worker', name, `file_size=${req.file.size}`, 'success');
+    } else if (scriptFile) {
+      const { script } = await deployWorker(account, name, scriptFile.buffer.toString('utf-8'), assetsOpts);
+      createAuditLog(account.id, 'deploy_worker', name, `file_size=${scriptFile.size}${assetsOpts ? ',with_assets' : ''}`, 'success');
       res.status(201).json(script);
     } else {
       res.status(400).json({ error: { code: 'NO_FILE', message: 'Script file or URL is required' } });
@@ -519,26 +538,28 @@ router.get('/usage', async (_req: Request, res: Response, next: NextFunction) =>
 });
 
 // ============ Batch Deploy ============
-router.post('/batch-deploy', upload.single('script'), async (req: Request, res: Response, next: NextFunction) => {
+router.post('/batch-deploy', uploadWorkerAssets.fields([{ name: 'script' }, { name: 'assets' }]), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { targets, url: scriptUrl } = req.body;
+    const files = req.files as { script?: Express.Multer.File[]; assets?: Express.Multer.File[] };
+    const assetsOpts = toAssetsOptions(files.assets?.[0]);
+    const scriptContent = files.script?.[0] ? files.script[0].buffer.toString('utf-8') : null;
     const parsedTargets = typeof targets === 'string' ? JSON.parse(targets) : targets;
     if (!Array.isArray(parsedTargets) || parsedTargets.length === 0) {
       res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'targets must be a non-empty array' } }); return;
     }
-    if (!req.file && !scriptUrl) {
+    if (!scriptContent && !scriptUrl) {
       res.status(400).json({ error: { code: 'NO_FILE', message: 'Script file or URL is required' } }); return;
     }
-    const scriptContent = req.file ? req.file.buffer.toString('utf-8') : null;
     const results: Array<{ accountId: number; workerName: string; success: boolean; error?: string }> = [];
     await Promise.all(parsedTargets.map(async (t: { accountId: number; workerName: string }) => {
       try {
         const account = getAccountById(t.accountId);
         if (!account) { results.push({ ...t, success: false, error: 'Account not found' }); return; }
         if (scriptUrl) {
-          await deployWorkerFromUrl(account, t.workerName, scriptUrl);
+          await deployWorkerFromUrl(account, t.workerName, scriptUrl, assetsOpts);
         } else {
-          await deployWorker(account, t.workerName, scriptContent!);
+          await deployWorker(account, t.workerName, scriptContent!, assetsOpts);
         }
         createAuditLog(account.id, 'batch_deploy', t.workerName, null, 'success');
         results.push({ ...t, success: true });

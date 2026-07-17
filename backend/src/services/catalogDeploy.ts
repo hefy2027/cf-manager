@@ -324,6 +324,7 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
         env: template.env,
         createDeployment: true,
         deploymentAnnotation: { 'cf-manager/store': template.id },
+        assets: template.assets as any,
       });
       urls.push(accountSubdomain ? `https://${name}.${accountSubdomain}.workers.dev` : `https://${name}.workers.dev`);
       appLogger.info(`[Store] Worker deployed: ${name}`);

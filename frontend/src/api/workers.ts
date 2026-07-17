@@ -9,10 +9,11 @@ export const workersApi = {
   getSummary: () => apiClient.get('/workers/summary'),
 
   // Deploy / Delete
-  deploy: (accountId: number, name: string, file: File) => {
+  deploy: (accountId: number, name: string, file: File, assets?: File) => {
     const formData = new FormData();
     formData.append('script', file);
     formData.append('name', name);
+    if (assets) formData.append('assets', assets);
     return apiClient.post(`/workers/${accountId}/workers`, formData);
   },
   deployFromUrl: (accountId: number, name: string, url: string) => {
@@ -92,11 +93,12 @@ export const workersApi = {
   getUsage: () => apiClient.get('/workers/usage'),
 
   // Batch Deploy
-  batchDeploy: (targets: Array<{ accountId: number; workerName: string }>, script?: File, url?: string) => {
+  batchDeploy: (targets: Array<{ accountId: number; workerName: string }>, script?: File, url?: string, assets?: File) => {
     const formData = new FormData();
     formData.append('targets', JSON.stringify(targets));
     if (script) formData.append('script', script);
     if (url) formData.append('url', url);
+    if (assets) formData.append('assets', assets);
     return apiClient.post('/workers/batch-deploy', formData, { timeout: 120000 });
   },
   batchDeployPages: (targets: Array<{ accountId: number; workerName: string }>, zipFile: File) => {

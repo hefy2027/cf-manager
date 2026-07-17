@@ -104,7 +104,23 @@
           "items": { "$ref": "#/$defs/binding" }
         },
         "env": { "type": "object" },
-        "routes": { "type": "array", "items": { "type": "string" } }
+        "routes": { "type": "array", "items": { "type": "string" } },
+        "assets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source"],
+          "properties": {
+            "source": { "$ref": "#/$defs/source" },
+            "binding": { "type": "string", "description": "资产绑定变量名，默认 ASSETS" },
+            "config": {
+              "type": "object",
+              "properties": {
+                "html_handling": { "type": "string" },
+                "not_found_handling": { "type": "string" }
+              }
+            }
+          }
+        }
       },
       "allOf": [
         {

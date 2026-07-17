@@ -56,6 +56,11 @@ export interface CatalogTemplate {
   bindings?: CatalogBinding[];
   env?: Record<string, string>;
   routes?: string[];
+  assets?: {
+    source: SourceConfig;
+    binding?: string;
+    config?: { html_handling?: string; not_found_handling?: string };
+  };
 }
 
 export interface Catalog {

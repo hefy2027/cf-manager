@@ -2,6 +2,7 @@ import type { Account } from '../db/models';
 import { cfFetch, cfFetchRaw, cfFetchAll } from './cfApi';
 import type { CatalogTemplate, CatalogBinding } from './catalogValidator';
 import { deployPages, extractZipFiles, validatePagesProjectName, ensurePagesProject } from './pagesDeploy';
+import { deployWorker } from './assetsDeploy';
 import { addAuditLog } from '../db/models';
 
 export interface DeployOptions {
@@ -246,39 +247,11 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
       const src = template.type === 'hybrid' ? template.sources?.worker : template.source;
       if (!src) throw new Error('No worker source configured');
       const { content } = await downloadArtifact(src.url, 'worker');
-
-      const metadata: Record<string, unknown> = {
-        main_module: 'worker.js',
-        compatibility_date: '2024-01-01',
+      await deployWorker(account, encryptionKey, name, content, {
         bindings: resolvedBindings.map(b => b.cfBinding),
-      };
-      if (template.env) {
-        metadata.bindings = [
-          ...resolvedBindings.map(b => b.cfBinding),
-          ...Object.entries(template.env).map(([k, v]) => ({ type: 'plain_text', name: k, text: v })),
-        ];
-      }
-      const form = new FormData();
-      form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-      form.append('worker.js', new Blob([content], { type: 'application/javascript+module' }), 'worker.js');
-
-      const workerResp = await cfFetchRaw(account, `/accounts/${account.account_id}/workers/scripts/${name}`, encryptionKey, {
-        method: 'PUT', body: form,
+        env: template.env,
+        assets: template.assets,
       });
-      if (!workerResp.ok) {
-        const errBody = await workerResp.text();
-        throw new Error(`Worker 部署失败 (${workerResp.status}): ${errBody}`);
-      }
-
-      // Enable workers.dev subdomain so the Worker is accessible immediately (matches backend deployWorker behavior)
-      try {
-        await cfFetch(account, `/accounts/${account.account_id}/workers/scripts/${name}/subdomain`, encryptionKey, {
-          method: 'POST', body: JSON.stringify({ enabled: true, previews_enabled: true }),
-        });
-      } catch (_) {
-        // Soft fail: user can still enable manually from settings drawer
-      }
-
       const sub = await getWorkerSubdomain(account, encryptionKey);
       urls.push(sub ? `https://${name}.${sub}.workers.dev` : `https://${name}.workers.dev`);
       workerDeployed = true;
