@@ -3,7 +3,7 @@
     <n-h2>存储管理</n-h2>
     <n-space align="center" style="margin-bottom: 16px">
      <span>账号：</span>
-      <n-select v-model:value="selectedAccount" :options="accountOptions" filterable placeholder="搜索账号" style="width: 200px; max-width: 60vw" size="small" @update:value="onAccountChange" />
+      <n-select v-model:value="selectedAccount" :options="accountOptions" :render-label="renderAccountLabel" filterable placeholder="搜索账号" style="width: 200px; max-width: 60vw" size="small" @update:value="onAccountChange" />
    </n-space>
 
     <n-tabs v-model:value="activeTab" type="line">
@@ -271,7 +271,7 @@
 
 <script setup lang="ts">
 import { ref, computed, h, onMounted, watch } from 'vue';
-import { NButton, NSpace, NInput, NSelect, NCheckbox, useMessage, useDialog } from 'naive-ui';
+import { NButton, NSpace, NInput, NSelect, NCheckbox, NTag, useMessage, useDialog } from 'naive-ui';
 import type { DataTableColumns } from 'naive-ui';
 import { storageApi } from '../api/storage';
 import { accountsApi } from '../api/accounts';
@@ -305,24 +305,36 @@ const accountOptions = computed(() =>
     .map((a: any) => ({ label: a.name, value: a.id }))
 );
 
+function renderAccountLabel(option: { label: string; value: number }) {
+  const account = allAccounts.value.find((a: any) => a.id === option.value);
+  if (!account) return option.label;
+  const af = (account.available_features || '').split(',').filter(Boolean);
+  if (af.includes('r2')) {
+    return h('span', { style: 'display: inline-flex; align-items: center; gap: 4px' }, [
+      option.label,
+      h(NTag, { size: 'tiny', type: 'success', bordered: false }, { default: () => 'R2' }),
+    ]);
+  }
+  return option.label;
+}
+
 // 当前选中的账户是否为演示（Demo）保护账户：演示账户禁用所有删除/写操作按钮
 const isDemoSelected = computed(() => isDemoAccount(selectedAccount.value));
 
 async function checkR2Available() {
   if (!selectedAccount.value) { r2Available.value = true; return; }
-  try {
-    await storageApi.getR2Buckets(selectedAccount.value, { _silent: true });
-    r2Available.value = true;
-  } catch (err: any) {
-    const code = err?.response?.data?.error?.code;
-    const msg = err?.response?.data?.error?.message || err?.message || '';
-    if (code === 'R2_NOT_ENABLED' || msg.includes('10042') || msg.includes('Please enable R2')) {
-      r2Available.value = false;
-      if (activeTab.value === 'r2') activeTab.value = 'kv';
-    } else {
-      r2Available.value = true;
-    }
+  const account = allAccounts.value.find((a: any) => a.id === selectedAccount.value);
+  if (!account) return;
+
+  // 用数组精确匹配，避免 includes('r2') 误匹配 '-r2' 子串
+  const features = (account.available_features || '').split(',').filter(Boolean);
+  if (features.includes('r2')) { r2Available.value = true; return; }
+  if (features.includes('-r2')) {
+    r2Available.value = false;
+    if (activeTab.value === 'r2') activeTab.value = 'kv';
+    return;
   }
+  // 空值 = 未探测，保留默认值 true
 }
 
 async function onAccountChange() {

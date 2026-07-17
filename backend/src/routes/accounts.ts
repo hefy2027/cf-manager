@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import Cloudflare from 'cloudflare';
-import { getAllAccounts, createAccount, deleteAccount, getAccountById, getAccountByEmail, nameFromEmail, updateAccountStatus, updateAccountId, updateAccountFeatures, AccountInput } from '../models/account';
+import { getAllAccounts, createAccount, deleteAccount, getAccountById, getAccountByEmail, nameFromEmail, updateAccountStatus, updateAccountId, updateAccountFeatures, updateAccount, AccountInput } from '../models/account';
 import { listAccountsPaged, AccountListFilter } from '../models/account';
 import { encrypt } from '../services/encryptionService';
 import { decrypt } from '../services/encryptionService';
@@ -13,6 +13,7 @@ import { createAuditLog } from '../models/auditLog';
 import { getHttpAgent } from '../services/proxyService';
 import { clearExhausted } from '../models/quotaUsage';
 import { isDemoAccountId } from './routeUtils';
+import { probeAvailableFeatures } from '../services/accountProbe';
 
 const router = Router();
 
@@ -119,8 +120,124 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       }
     }
 
+    // 探测 R2 可用性（重新获取，account_id 可能刚被更新）
+    try {
+      const fresh = getAccountById(id);
+      if (fresh) {
+        const features = await probeAvailableFeatures(fresh);
+        if (features) updateAccount(id, { available_features: features });
+      }
+    } catch (e) {
+      appLogger.warn(`[Account] Failed to probe features for "${name}": ${e}`);
+    }
+
     createAuditLog(id, 'create_account', name, `auth_type=${auth_type}`, 'success');
     res.status(201).json({ id, ...input, api_token: '***', api_key: '***' });
+  } catch (err) { next(err); }
+});
+
+router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = parseInt(req.params.id as string, 10);
+    if (isDemoAccountId(id)) {
+      res.status(403).json({ error: { code: 'DEMO_PROTECTED', message: '演示账户不可编辑' } });
+      return;
+    }
+    const existing = getAccountById(id);
+    if (!existing) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Account not found' } }); return; }
+
+    const { name, auth_type, api_token, api_key, email } = req.body;
+    if (!name || !auth_type) {
+      res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'name and auth_type are required' } });
+      return;
+    }
+    if (auth_type !== 'token' && auth_type !== 'global_key') {
+      res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'auth_type must be "token" or "global_key"' } });
+      return;
+    }
+
+    const input: Partial<AccountInput> = { name, auth_type };
+    const switching = existing.auth_type !== auth_type;
+
+    if (auth_type === 'token') {
+      if (switching && !api_token) {
+        res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: '切换至 token 认证需提供 api_token' } });
+        return;
+      }
+      if (api_token) {
+        try {
+          const tempCf = new Cloudflare({ apiToken: api_token, ...(getHttpAgent() ? { httpAgent: getHttpAgent() } : {}) });
+          await tempCf.user.get();
+        } catch (e: any) {
+          res.status(400).json({ error: { code: 'CREDENTIAL_INVALID', message: `Cloudflare API 凭证验证失败: ${e.message || e}` } });
+          return;
+        }
+        input.api_token = encrypt(api_token);
+      }
+      if (switching) { input.api_key = null; input.email = null; }
+    } else {
+      const hasEmail = !!email, hasKey = !!api_key;
+      if (switching && (!hasEmail || !hasKey)) {
+        res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: '切换至 global_key 认证需同时提供 email 和 api_key' } });
+        return;
+      }
+      if (hasEmail !== hasKey) {
+        res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'email 与 api_key 需同时填写' } });
+        return;
+      }
+      if (hasEmail && hasKey) {
+        try {
+          const tempCf = new Cloudflare({ apiEmail: email, apiKey: api_key, ...(getHttpAgent() ? { httpAgent: getHttpAgent() } : {}) });
+          await tempCf.user.get();
+        } catch (e: any) {
+          res.status(400).json({ error: { code: 'CREDENTIAL_INVALID', message: `Cloudflare API 凭证验证失败: ${e.message || e}` } });
+          return;
+        }
+        input.api_key = encrypt(api_key);
+        input.email = email;
+      }
+      if (switching) { input.api_token = null; }
+    }
+
+    // 先保存，再重取 saved（确保用新凭证刷新 account_id 和探测）
+    updateAccount(id, input);
+    const saved = getAccountById(id);
+    if (!saved) { res.status(500).json({ error: { code: 'INTERNAL', message: '保存后账户消失' } }); return; }
+
+    // 自动刷新 account_id（触发条件：无 account_id 或提供了新凭证）
+    if (!saved.account_id || input.api_token || input.api_key) {
+      try {
+        const cf = getCfClient(saved);
+        const accts: any[] = [];
+        for await (const acct of cf.accounts.list()) accts.push(acct as any);
+        if (accts.length > 0) {
+          updateAccountId(id, accts[0].id);
+          appLogger.info(`[Account] Auto-fetched account_id=${accts[0].id} for "${name}"`);
+        }
+        updateAccountStatus(id, true);
+      } catch (e) {
+        appLogger.warn(`[Account] Failed to auto-fetch account_id for "${name}": ${e}`);
+      }
+    }
+
+    clearCache();
+    createAuditLog(id, 'update_account', name, `auth_type=${auth_type}`, 'success');
+
+    // 若提供了新凭证，探测可用付费功能（R2...），失败不阻断
+    if (input.api_token || input.api_key) {
+      try {
+        const probed = getAccountById(id);
+        if (probed) {
+          const features = await probeAvailableFeatures(probed);
+          updateAccount(id, { available_features: features });
+          appLogger.info(`[Account] Probed features for "${name}": ${features}`);
+        }
+      } catch (e) {
+        appLogger.warn(`[Account] Failed to probe features for "${name}": ${e}`);
+      }
+    }
+
+    res.json({ success: true });
   } catch (err) { next(err); }
 });
 
@@ -222,6 +339,18 @@ router.post('/:id/test', async (req: Request, res: Response, next: NextFunction)
 
     // 测试成功，更新状态为活跃
     updateAccountStatus(accountId, true);
+
+    // 探测 R2 可用性（重新获取，account_id 可能刚被更新）
+    try {
+      const fresh = getAccountById(accountId);
+      if (fresh) {
+        const features = await probeAvailableFeatures(fresh);
+        if (features) updateAccount(accountId, { available_features: features });
+      }
+    } catch (e) {
+      appLogger.warn(`[Account] Failed to probe features for account ${accountId}: ${e}`);
+    }
+
     res.json({ success: true, user });
   } catch (err) { next(err); }
 });
@@ -284,6 +413,18 @@ router.post('/test-batch', async (req: Request, res: Response, next: NextFunctio
           }
         }
         updateAccountStatus(account.id, true);
+
+        // 探测 R2 可用性（重新获取，account_id 可能刚被更新）
+        try {
+          const fresh = getAccountById(account.id);
+          if (fresh) {
+            const features = await probeAvailableFeatures(fresh);
+            if (features) updateAccount(account.id, { available_features: features });
+          }
+        } catch (e) {
+          appLogger.warn(`[Account:TestBatch] Failed to probe features for "${account.name}": ${e}`);
+        }
+
         createAuditLog(account.id, 'test_account', account.name, 'batch', 'success');
         results.push({ id: account.id, name: account.name, status: 'success' });
       } catch (e: any) {

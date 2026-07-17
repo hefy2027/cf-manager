@@ -10,6 +10,7 @@ export interface Account {
   enabled_features: string;
   created_at: string;
   updated_at: string;
+  available_features: string;
 }
 
 export type AccountFeature = 'ai' | 'workers' | 'browser_render' | 'dns' | 'storage';

@@ -4,7 +4,7 @@
       <n-form v-if="template" label-placement="top" size="small">
         <!-- Account -->
         <n-form-item label="目标账户" required>
-          <n-select v-model:value="form.accountId" :options="accountOptions" filterable placeholder="选择账户" @update:value="onAccountChange" />
+          <n-select v-model:value="form.accountId" :options="accountOptions" :render-label="renderAccountLabel" filterable placeholder="选择账户" @update:value="onAccountChange" />
         </n-form-item>
 
         <!-- Name -->
@@ -83,10 +83,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, h } from 'vue';
 import { storeApi } from '../api/store';
 import { workersApi } from '../api/workers';
 import { accountsApi } from '../api/accounts';
+import { NTag } from 'naive-ui';
 
 const props = defineProps<{ show: boolean; template: any }>();
 const emit = defineEmits<{ 'update:show': [boolean]; deployed: [any] }>();
@@ -108,6 +109,19 @@ const existingResources = ref<Record<string, any[]>>({ kv: [], d1: [], r2: [] })
 const accountOptions = computed(() =>
   accounts.value.map(a => ({ label: a.name, value: a.id }))
 );
+
+function renderAccountLabel(option: { label: string; value: number }) {
+  const account = accounts.value.find((a: any) => a.id === option.value);
+  if (!account) return option.label;
+  const af = (account.available_features || '').split(',').filter(Boolean);
+  if (af.includes('r2')) {
+    return h('span', { style: 'display: inline-flex; align-items: center; gap: 4px' }, [
+      option.label,
+      h(NTag, { size: 'tiny', type: 'success', bordered: false }, { default: () => 'R2' }),
+    ]);
+  }
+  return option.label;
+}
 
 const resourceBindings = computed(() =>
   (props.template?.bindings || []).filter((b: any) => ['kv', 'd1', 'r2'].includes(b.type))

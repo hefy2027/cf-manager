@@ -377,6 +377,11 @@ app.get('/:accountId/resources/d1', async (c) => {
 
 app.get('/:accountId/resources/r2', async (c) => {
   const account = await requireAccount(c);
+  // 短路：缓存显示 R2 不可用则直接返回
+  const r2Features = (account.available_features || '').split(',');
+  if (r2Features.includes('-r2')) {
+    return c.json({ r2_not_enabled: true, buckets: [] });
+  }
   try {
     const data = await cfFetch<{ result: any }>(account, `/accounts/${account.account_id}/r2/buckets`, c.env.ENCRYPTION_KEY);
     return c.json(data.result?.buckets || []);

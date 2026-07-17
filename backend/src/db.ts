@@ -98,6 +98,9 @@ export function initDb(): void {
   if (!cols.find(c => c.name === 'password')) {
     db.exec("ALTER TABLE accounts ADD COLUMN password TEXT");
   }
+  if (!cols.find(c => c.name === 'available_features')) {
+    db.exec("ALTER TABLE accounts ADD COLUMN available_features TEXT DEFAULT ''");
+  }
 
   // Migrate quota_usage: add exhausted column if not exists
   const quotaCols = db.prepare("PRAGMA table_info('quota_usage')").all() as { name: string }[];

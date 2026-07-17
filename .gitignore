@@ -15,11 +15,13 @@ backups/
 .vscode
 *.sw?
 
+.superpowers
 docs/specs
 docs/superpowers/
 reg/
 worker/public/
 worker/cf-manager.zip
+
 
 # Ignore generated pricing data files (managed by sync-shared script)
 backend/src/data/
@@ -38,6 +40,7 @@ worker/src/version.ts
 backend/src/version.ts
 
 # Ignore AI tool configuration directories
+.claude/
 .agents/
 .codebuddy/
 .cursor/

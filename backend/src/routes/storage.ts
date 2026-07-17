@@ -188,6 +188,12 @@ router.get('/:accountId/r2', async (req: Request, res: Response, next: NextFunct
   try {
     const account = getAccountOr404(req, res);
     if (!account) return;
+    // 短路：缓存显示 R2 不可用则直接返回
+    const r2Features = (account.available_features || '').split(',');
+    if (r2Features.includes('-r2')) {
+      res.status(403).json({ success: false, error: { code: 'R2_NOT_ENABLED', message: 'R2 is not enabled for this account' } });
+      return;
+    }
     const result = await listR2Buckets(account);
     res.json(result);
   } catch (err: any) {

@@ -17,17 +17,19 @@ export interface Account {
   created_at: string;
   updated_at: string;
   password: string | null;
+  available_features: string;
 }
 
 export interface AccountInput {
   name: string;
   auth_type: 'token' | 'global_key';
-  api_token?: string;
-  api_key?: string;
-  email?: string;
+  api_token?: string | null;
+  api_key?: string | null;
+  email?: string | null;
   account_id?: string;
   enabled_features?: string;
   password?: string;
+  available_features?: string;
 }
 
 export function hasFeature(account: Account, feature: AccountFeature): boolean {
@@ -118,6 +120,30 @@ export function createAccount(input: AccountInput): number {
     input.password || null
   );
   return result.lastInsertRowid as number;
+}
+
+export function updateAccount(id: number, input: Partial<AccountInput>): void {
+  const sets: string[] = [];
+  const vals: any[] = [];
+  const fieldMap: Record<string, string> = {
+    name: 'name',
+    auth_type: 'auth_type',
+    api_token: 'api_token',
+    api_key: 'api_key',
+    email: 'email',
+    account_id: 'account_id',
+    available_features: 'available_features',
+  };
+  for (const [key, val] of Object.entries(input)) {
+    if (val !== undefined && fieldMap[key]) {
+      sets.push(`${fieldMap[key]} = ?`);
+      vals.push(val);
+    }
+  }
+  if (sets.length === 0) return;
+  sets.push('updated_at = CURRENT_TIMESTAMP');
+  vals.push(id);
+  getDb().prepare(`UPDATE accounts SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
 }
 
 export function updateAccountFeatures(id: number, features: string): void {

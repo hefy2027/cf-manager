@@ -64,6 +64,11 @@ export const useAccountStore = defineStore('accounts', () => {
     await fetchAccounts();
   }
 
+  async function updateAccount(id: number, data: any) {
+    await accountsApi.update(id, data);
+    await fetchAccounts();
+  }
+
   async function deleteAccount(id: number) {
     await accountsApi.delete(id);
     await fetchAccounts();
@@ -114,7 +119,7 @@ export const useAccountStore = defineStore('accounts', () => {
     accounts, quota, loading,
     page, pageSize, filter, search, total, counts,
     fetchAccounts, setPage, setPageSize, setFilter, setSearch,
-    createAccount, deleteAccount, testAccount, testBatch, updateFeatures, clearExhausted, importCsv,
+    createAccount, updateAccount, deleteAccount, testAccount, testBatch, updateFeatures, clearExhausted, importCsv,
     getCredentials,
   };
 });
