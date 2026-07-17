@@ -53,71 +53,80 @@
     <n-drawer v-model:show="detailVisible" :width="isMobile ? '100%' : 720" placement="right">
       <n-drawer-content :title="detailItem?.template.name || '详情'" closable>
         <template v-if="detailItem">
-          <n-space vertical>
-            <n-descriptions label-placement="left" :column="1" size="small" bordered>
-              <n-descriptions-item label="版本">{{ detailItem.template.version }}</n-descriptions-item>
-              <n-descriptions-item label="类型">{{ detailItem.template.type }}</n-descriptions-item>
-              <n-descriptions-item label="作者">
-                <a v-if="detailItem.template.author?.url" :href="detailItem.template.author.url" target="_blank" rel="noopener noreferrer">{{ detailItem.template.author.name }}</a>
-                <span v-else>{{ detailItem.template.author?.name || '-' }}</span>
-              </n-descriptions-item>
-              <n-descriptions-item label="来源">{{ detailItem.sourceName }}</n-descriptions-item>
-              <n-descriptions-item v-if="detailItem.sourceCount > 1" label="多源">来自 {{ detailItem.sourceCount }} 个源</n-descriptions-item>
-              <n-descriptions-item v-if="detailItem.template.homepage" label="主页">
-                <a :href="detailItem.template.homepage" target="_blank" rel="noopener noreferrer">{{ detailItem.template.homepage }}</a>
-              </n-descriptions-item>
-            </n-descriptions>
+          <div class="detail-layout">
+            <!-- 头部：描述信息 + 按钮（不滚动） -->
+            <div class="detail-header">
+              <n-descriptions label-placement="left" :column="1" size="small" bordered>
+                <n-descriptions-item label="版本">{{ detailItem.template.version }}</n-descriptions-item>
+                <n-descriptions-item label="类型">{{ detailItem.template.type }}</n-descriptions-item>
+                <n-descriptions-item label="作者">
+                  <a v-if="detailItem.template.author?.url" :href="detailItem.template.author.url" target="_blank" rel="noopener noreferrer">{{ detailItem.template.author.name }}</a>
+                  <span v-else>{{ detailItem.template.author?.name || '-' }}</span>
+                </n-descriptions-item>
+                <n-descriptions-item label="来源">{{ detailItem.sourceName }}</n-descriptions-item>
+                <n-descriptions-item v-if="detailItem.sourceCount > 1" label="多源">来自 {{ detailItem.sourceCount }} 个源</n-descriptions-item>
+                <n-descriptions-item v-if="detailItem.template.homepage" label="主页">
+                  <a :href="detailItem.template.homepage" target="_blank" rel="noopener noreferrer">{{ detailItem.template.homepage }}</a>
+                </n-descriptions-item>
+              </n-descriptions>
 
-            <n-space style="margin-bottom: 8px">
-              <n-button
-                v-if="sourceRepoUrl"
-                size="small"
-                tag="a"
-                :href="sourceRepoUrl"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <template #icon><n-icon :component="LogoGithub" /></template>
-                前往源仓库
-              </n-button>
-              <n-button
-                v-if="readmeGithubUrl"
-                size="small"
-                secondary
-                tag="a"
-                :href="readmeGithubUrl"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                在 GitHub 查看完整 README
-              </n-button>
-            </n-space>
-
-            <n-spin v-if="readmeLoading" size="small" style="padding: 8px 0">正在加载 README…</n-spin>
-            <MarkdownRenderer v-else :content="readmeContent || detailItem.template.description || '暂无说明'" :base-url="readmeBaseUrl" :repo-url="repoRootUrl" />
-
-            <div v-if="detailItem.template.bindings?.length">
-              <n-h4>绑定</n-h4>
-              <n-list size="small" bordered>
-                <n-list-item v-for="b in detailItem.template.bindings" :key="b.name">
-                  <n-tag size="tiny" :type="bindingTagType(b.type)">{{ b.type }}</n-tag>
-                  <span style="margin-left: 8px">{{ b.name }}</span>
-                  <span v-if="b.title" style="color: var(--text-color-3); margin-left: 8px">→ {{ b.title }}</span>
-                </n-list-item>
-              </n-list>
+              <n-space style="margin: 8px 0">
+                <n-button
+                  v-if="sourceRepoUrl"
+                  size="small"
+                  tag="a"
+                  :href="sourceRepoUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <template #icon><n-icon :component="LogoGithub" /></template>
+                  前往源仓库
+                </n-button>
+                <n-button
+                  v-if="readmeGithubUrl"
+                  size="small"
+                  secondary
+                  tag="a"
+                  :href="readmeGithubUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  在 GitHub 查看完整 README
+                </n-button>
+              </n-space>
             </div>
 
-            <div v-if="detailItem.template.env && Object.keys(detailItem.template.env).length">
-              <n-h4>环境变量</n-h4>
-              <n-list size="small" bordered>
-                <n-list-item v-for="(v, k) in detailItem.template.env" :key="k">
-                  <span style="font-family: monospace">{{ k }}</span> = <span style="color: var(--text-color-3)">{{ v }}</span>
-                </n-list-item>
-              </n-list>
+            <!-- 中部：README 独立滚动 -->
+            <div class="detail-readme">
+              <n-spin v-if="readmeLoading" size="small" style="padding: 8px 0">正在加载 README…</n-spin>
+              <MarkdownRenderer v-else :content="readmeContent || detailItem.template.description || '暂无说明'" :base-url="readmeBaseUrl" :repo-url="repoRootUrl" />
             </div>
 
-            <n-button type="primary" block @click="openDeploy(detailItem)">部署此模板</n-button>
-          </n-space>
+            <!-- 底部：绑定 + 环境变量 + 部署按钮（不滚动） -->
+            <div class="detail-footer">
+              <div v-if="detailItem.template.bindings?.length">
+                <n-h4 style="margin: 8px 0">绑定</n-h4>
+                <n-list size="small" bordered>
+                  <n-list-item v-for="b in detailItem.template.bindings" :key="b.name">
+                    <n-tag size="tiny" :type="bindingTagType(b.type)">{{ b.type }}</n-tag>
+                    <span style="margin-left: 8px">{{ b.name }}</span>
+                    <span v-if="b.title" style="color: var(--text-color-3); margin-left: 8px">→ {{ b.title }}</span>
+                  </n-list-item>
+                </n-list>
+              </div>
+
+              <div v-if="detailItem.template.env && Object.keys(detailItem.template.env).length">
+                <n-h4 style="margin: 8px 0">环境变量</n-h4>
+                <n-list size="small" bordered>
+                  <n-list-item v-for="(v, k) in detailItem.template.env" :key="k">
+                    <span style="font-family: monospace">{{ k }}</span> = <span style="color: var(--text-color-3)">{{ v }}</span>
+                  </n-list-item>
+                </n-list>
+              </div>
+
+              <n-button type="primary" block @click="openDeploy(detailItem)">部署此模板</n-button>
+            </div>
+          </div>
         </template>
       </n-drawer-content>
     </n-drawer>
@@ -370,5 +379,46 @@ onMounted(async () => {
 .page-view {
   max-width: 1100px;
   margin: 0 auto;
+}
+
+/* 详情抽屉三段式布局：上固定 / 中 README 独立滚动 / 下固定 */
+/* 把 n-drawer-content 自带的 body 滚动关掉，让内部 flex 容器自己管理滚动 */
+:deep(.n-drawer-content .n-drawer-content__body) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.detail-layout {
+  display: flex;
+  flex-direction: column;
+  /* 占满抽屉 body 的高度 */
+  height: 100%;
+  min-height: 0;
+}
+.detail-header {
+  flex-shrink: 0;
+}
+.detail-readme {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* 给 README 一点内边距，避免贴边 */
+  padding: 4px 8px 4px 0;
+  scrollbar-gutter: stable;
+}
+.detail-footer {
+  flex-shrink: 0;
+  /* 与 README 之间留点空隙 */
+  margin-top: 12px;
+}
+
+/* 长代码块在 README 内换行，避免横向溢出 */
+.detail-readme :deep(pre) {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.detail-readme :deep(pre code) {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 </style>

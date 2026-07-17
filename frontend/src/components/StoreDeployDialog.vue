@@ -5,6 +5,11 @@
         <!-- Account -->
         <n-form-item label="目标账户" required>
           <n-select v-model:value="form.accountId" :options="accountOptions" :render-label="renderAccountLabel" filterable placeholder="选择账户" @update:value="onAccountChange" />
+          <template v-if="needsR2" #feedback>
+            <n-text type="warning" depth="3" style="font-size: 12px">
+              该模板需要 R2，仅显示已开通 R2 的账户
+            </n-text>
+          </template>
         </n-form-item>
 
         <!-- Name -->
@@ -106,15 +111,29 @@ const secretValues = ref<Record<string, string>>({});
 const resourceLoading = ref<Record<string, boolean>>({});
 const existingResources = ref<Record<string, any[]>>({ kv: [], d1: [], r2: [] });
 
-const accountOptions = computed(() =>
-  accounts.value.map(a => ({ label: a.name, value: a.id }))
+// 模板是否需要 R2：存在 type 为 r2 的绑定
+const needsR2 = computed(() =>
+  (props.template?.bindings || []).some((b: any) => b.type === 'r2')
 );
+
+// 精确判断账户是否开通 R2：避免 '-r2' 被 includes('r2') 误匹配
+function hasR2Feature(account: any): boolean {
+  const features = (account.available_features || '').split(',').filter(Boolean);
+  return features.includes('r2') && !features.includes('-r2');
+}
+
+const accountOptions = computed(() => {
+  const list = accounts.value
+    // 需要 R2 时只保留已开通 R2 的账户，其余不可选
+    .filter((a) => !needsR2.value || hasR2Feature(a))
+    .map((a) => ({ label: a.name, value: a.id }));
+  return list;
+});
 
 function renderAccountLabel(option: { label: string; value: number }) {
   const account = accounts.value.find((a: any) => a.id === option.value);
   if (!account) return option.label;
-  const af = (account.available_features || '').split(',').filter(Boolean);
-  if (af.includes('r2')) {
+  if (hasR2Feature(account)) {
     return h('span', { style: 'display: inline-flex; align-items: center; gap: 4px' }, [
       option.label,
       h(NTag, { size: 'tiny', type: 'success', bordered: false }, { default: () => 'R2' }),
