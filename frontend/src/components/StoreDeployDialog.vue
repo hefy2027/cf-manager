@@ -26,6 +26,32 @@
           </n-radio-group>
         </n-form-item>
 
+        <!-- Observability -->
+        <n-form-item label="可观测性">
+          <n-space align="center" :size="24">
+            <n-space align="center" :size="8">
+              <n-switch v-model:value="enableLogs" size="small" />
+              <n-tooltip>
+                <template #trigger>
+                  <span style="font-size: 13px; cursor: help">Workers 日志</span>
+                </template>
+                开启后可在 Workers Logs 查看 console.log 与调用日志
+              </n-tooltip>
+            </n-space>
+            <n-space align="center" :size="8">
+              <n-switch v-model:value="enableTraces" size="small" />
+              <n-tooltip>
+                <template #trigger>
+                  <span style="font-size: 13px; cursor: help">Workers 跟踪</span>
+                </template>
+                开启链路追踪与指标（Workers Observability）
+              </n-tooltip>
+            </n-space>
+          </n-space>
+        </n-form-item>
+
+
+
         <!-- Bindings -->
         <template v-if="template.bindings?.length">
           <n-divider>绑定资源</n-divider>
@@ -112,6 +138,8 @@ const visible = computed({
 
 const deploying = ref(false);
 const deployType = ref<'worker' | 'pages' | 'both'>('both');
+const enableLogs = ref(true);    // Workers 日志（默认开启）
+const enableTraces = ref(true);  // Workers 跟踪（默认开启）
 const accounts = ref<any[]>([]);
 const form = ref({ accountId: null as number | null, name: '' });
 const bindingSelections = ref<Record<string, { value: string; mode: 'auto' | 'existing'; existingId?: string; runInitSql: boolean }>>({});
@@ -241,6 +269,8 @@ async function handleDeploy() {
       bindingSelections: selections,
       secretValues: secretValues.value,
       deployType: props.template.type === 'hybrid' ? deployType.value : undefined,
+      logs: enableLogs.value,
+      traces: enableTraces.value,
     });
 
     emit('deployed', result);
@@ -265,6 +295,8 @@ watch(() => props.template, (tmpl) => {
     secretValues.value = {};
     bindingSelections.value = {};
     existingResources.value = { kv: [], d1: [], r2: [] };
+    enableLogs.value = true;
+    enableTraces.value = true;
     for (const b of (tmpl.bindings || [])) {
       if (['kv', 'd1', 'r2'].includes(b.type)) {
         bindingSelections.value[b.name] = { value: '__auto__', mode: 'auto', runInitSql: b.type === 'd1' };

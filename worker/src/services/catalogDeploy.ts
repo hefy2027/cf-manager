@@ -14,6 +14,8 @@ export interface DeployOptions {
   secretValues: Record<string, string>;  // for var/prompt bindings
   db?: D1Database;           // for audit log
   deployType?: 'worker' | 'pages' | 'both';
+  traces?: boolean;          // Workers 跟踪（默认开启）
+  logs?: boolean;            // Workers 日志（默认开启）
 }
 
 interface ResolvedBinding {
@@ -51,10 +53,10 @@ async function downloadArtifact(url: string, type: 'worker' | 'pages'): Promise<
 
   // Content type validation
   if (type === 'worker') {
-    // Should be text/JS, not binary
+    // 允许 zip：多模块 Worker 产物是压缩包，由 deployWorker 本地解包上传（与 backend 对称）
     const firstBytes = buffer.slice(0, 4);
     const isZip = firstBytes[0] === 0x50 && firstBytes[1] === 0x4b; // PK
-    if (isZip) throw new Error('Worker 产物应是 JS 文本，但下载内容是 zip');
+    if (isZip) console.log(`[Store] Worker 产物为 zip，将按多模块方式解包上传`);
   } else {
     // Pages should be zip
     const firstBytes = buffer.slice(0, 4);
@@ -213,7 +215,7 @@ async function getWorkerSubdomain(account: Account, encryptionKey: string): Prom
 }
 
 export async function deployTemplate(opts: DeployOptions): Promise<DeployResult> {
-  const { account, encryptionKey, template, name, bindingSelections, secretValues, deployType } = opts;
+  const { account, encryptionKey, template, name, bindingSelections, secretValues, deployType, traces, logs } = opts;
   if (!validatePagesProjectName(name)) {
     return { success: false, error: '项目名只能包含小写字母、数字和连字符，且以字母或数字开头', warnings: [], bindings: [] };
   }
@@ -253,7 +255,11 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
         ...(src?.mainModule ? { mainModule: src.mainModule } : {}),
         bindings: resolvedBindings.map(b => b.cfBinding),
         env: template.env,
+        ...(template.compatibility_date ? { compatibilityDate: template.compatibility_date } : {}),
+        ...(template.compatibility_flags?.length ? { compatibilityFlags: template.compatibility_flags } : {}),
         assets: template.assets,
+        traces: traces !== false,
+        logs: logs !== false,
       });
       const sub = await getWorkerSubdomain(account, encryptionKey);
       urls.push(sub ? `https://${name}.${sub}.workers.dev` : `https://${name}.workers.dev`);

@@ -53,6 +53,8 @@ export interface CatalogTemplate {
   homepage?: string;
   readmeUrl?: string;
   type: 'worker' | 'pages' | 'hybrid';
+  compatibility_date?: string;
+  compatibility_flags?: string[];
   source?: SourceConfig;
   sources?: { worker?: SourceConfig; pages?: SourceConfig };
   bindings?: CatalogBinding[];

@@ -264,7 +264,7 @@ router.get('/init', (_req: Request, res: Response) => {
 
 router.post('/deploy', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { accountId, templateId, name, bindingSelections, secretValues, deployType } = req.body;
+    const { accountId, templateId, name, bindingSelections, secretValues, deployType, traces, logs } = req.body;
     if (!accountId || !templateId || !name) {
       res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'accountId, templateId, name are required' } });
       return;
@@ -288,6 +288,8 @@ router.post('/deploy', async (req: Request, res: Response, next: NextFunction) =
       bindingSelections: bindingSelections || {},
       secretValues: secretValues || {},
       deployType: deployType || undefined,
+      traces: traces !== false,
+      logs: logs !== false,
     });
     if (result.success) {
       res.json(result);

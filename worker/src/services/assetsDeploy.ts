@@ -53,47 +53,98 @@ export async function buildAssetsManifest(
   return manifest;
 }
 
-// 三阶段上传之：manifest 会话 → base64 multipart 逐文件上传 → 取 completion jwt。
+// 三阶段上传之：manifest 会话 → 按 buckets 分批 base64 multipart 上传 → 取 completion jwt。
+// buckets 为空时所有资源已存在，sessionJwt 即为 completion token，跳过上传阶段。
 async function deployWorkerAssets(
   account: Account, encryptionKey: string, scriptName: string,
   files: Array<{ path: string; buffer: Uint8Array }>,
 ): Promise<{ jwt: string }> {
   const accountId = account.account_id;
-  const sessionResp: any = await cfFetch(account, `/accounts/${accountId}/workers/scripts/${scriptName}/assets-upload-session`, encryptionKey, {
-    method: 'POST', body: JSON.stringify({ manifest: await buildAssetsManifest(files) }),
-  });
-  const uploadJwt: string = sessionResp?.result?.jwt;
-  if (!uploadJwt) throw new Error(`assets-upload-session failed: ${JSON.stringify(sessionResp)}`);
-
-  const upForm = new FormData();
+  const manifest = await buildAssetsManifest(files);
+  // 预计算 hash → buffer 映射，用于按 buckets 选择性上传
+  const hashToBuffer = new Map<string, Uint8Array>();
   for (const f of files) {
     const hash = await computeStaticAssetHash(f.buffer, f.path);
-    upForm.append(hash, new Blob([uint8ToBase64(f.buffer)], { type: 'application/octet-stream' }), hash);
+    if (!hashToBuffer.has(hash)) hashToBuffer.set(hash, f.buffer);
   }
-  const upResp = await fetch(`${CF_API_BASE}/accounts/${accountId}/workers/assets/upload?base64=true`, {
-    method: 'POST', headers: { Authorization: `Bearer ${uploadJwt}` }, body: upForm,
+  const sessionResp: any = await cfFetch(account, `/accounts/${accountId}/workers/scripts/${scriptName}/assets-upload-session`, encryptionKey, {
+    method: 'POST', body: JSON.stringify({ manifest }),
   });
-  if (!upResp.ok) { const txt = await upResp.text(); throw new Error(`assets upload failed: ${upResp.status} ${txt}`); }
-  const upJson = await upResp.json() as any;
-  const completionJwt: string = upJson.jwt ?? upJson.result?.jwt;
-  if (!completionJwt) throw new Error(`assets upload missing jwt: ${JSON.stringify(upJson)}`);
+  const sessionJwt: string | undefined = sessionResp?.result?.jwt;
+  const buckets: string[][] = sessionResp?.result?.buckets || [];
+  if (!sessionJwt) {
+    throw new Error(`assets-upload-session failed: success=${sessionResp?.success} hasJwt=${!!sessionJwt} body=${JSON.stringify(sessionResp).slice(0, 500)}`);
+  }
+
+  // buckets 为空 → 所有资源已存在，sessionJwt 即为 completion token，直接返回（跳过上传）
+  if (buckets.length === 0) {
+    console.log(`[Worker Assets] All ${files.length} assets already uploaded, using completion JWT directly`);
+    return { jwt: sessionJwt };
+  }
+
+  // 按 buckets 分批上传：每个 bucket 是一批需要一起上传的 hash 列表
+  const totalHashes = buckets.reduce((n, b) => n + b.length, 0);
+  console.log(`[Worker Assets] Uploading ${totalHashes} assets in ${buckets.length} bucket(s)`);
+  let completionJwt: string | undefined;
+  for (let bi = 0; bi < buckets.length; bi++) {
+    const bucket = buckets[bi];
+    const upForm = new FormData();
+    for (const hash of bucket) {
+      const buf = hashToBuffer.get(hash);
+      if (!buf) { console.warn(`[Worker Assets] Hash ${hash} not found in local files, skipping`); continue; }
+      upForm.append(hash, new Blob([uint8ToBase64(buf)], { type: 'application/octet-stream' }), hash);
+    }
+    const upResp = await fetch(`${CF_API_BASE}/accounts/${accountId}/workers/assets/upload?base64=true`, {
+      method: 'POST', headers: { Authorization: `Bearer ${sessionJwt}` }, body: upForm,
+    });
+    if (!upResp.ok) { const txt = await upResp.text(); throw new Error(`assets upload failed (bucket ${bi + 1}/${buckets.length}): ${upResp.status} ${txt} (uploadJwtLen=${sessionJwt!.length})`); }
+    const upJson = await upResp.json() as any;
+    completionJwt = upJson.jwt ?? upJson.result?.jwt;
+  }
+  if (!completionJwt) throw new Error(`assets upload response missing completion jwt`);
   return { jwt: completionJwt };
 }
 
 // 对称于 backend workerService.deployWorker：PUT worker.js（或 packageZip 多模块）+ 可选 assets（三阶段注入 ASSETS 绑定）。
 export async function deployWorker(
   account: Account, encryptionKey: string, name: string, content: Uint8Array,
-  options?: { bindings?: any[]; env?: Record<string, string>; assets?: any; assetsBuffer?: Uint8Array; packageZip?: Uint8Array; mainModule?: string },
+  options?: { bindings?: any[]; env?: Record<string, string>; assets?: any; assetsBuffer?: Uint8Array; packageZip?: Uint8Array; mainModule?: string; compatibilityDate?: string; compatibilityFlags?: string[]; traces?: boolean; logs?: boolean },
 ): Promise<void> {
   const accountId = account.account_id;
   // 多模块：若提供 packageZip，本地解压为多个模块文件（与 wrangler 行为一致）。
   const moduleParts = options?.packageZip ? await extractZipFiles(options.packageZip) : null;
   const mainModule = resolveMainModule(moduleParts, options?.mainModule);
+
+  // 推断需要的兼容性标志：含 CJS 互操作（__commonJS/require）或访问 process/Buffer/node:
+  // 构建产物（如 React Router v7 on Workers）必须开启 nodejs_compat，否则运行时抛异常（Error 1101）。
+  const flags = new Set<string>(options?.compatibilityFlags || []);
+  const probe = (buf: Uint8Array | string) => {
+    const s = typeof buf === 'string' ? buf : new TextDecoder().decode(buf);
+    // process\. 捕获 process.env / process.platform / process.versions 等所有 process 访问；
+    // global\.process 捕获打包器生成的 global.process 互操作。这些在未开启 nodejs_compat 时会抛 ReferenceError。
+    return /__commonJS|function __require|\brequire\(|from ["']node:|\bprocess\.|globalThis\.process|global\.process|\bBuffer\.|node:async_hooks/.test(s);
+  };
+  let needsNodeCompat = false;
+  if (moduleParts && moduleParts.length > 0) {
+    needsNodeCompat = moduleParts.some(m => probe(m.buffer));
+  } else if (content && content.length > 0) {
+    needsNodeCompat = probe(content);
+  }
+  if (needsNodeCompat) flags.add('nodejs_compat');
+
   const metadata: Record<string, unknown> = {
     main_module: moduleParts && moduleParts.length > 0 ? mainModule : 'worker.js',
-    compatibility_date: '2024-01-01',
+    compatibility_date: options?.compatibilityDate || '2024-11-01',
     bindings: options?.bindings || [],
   };
+  if (flags.size > 0) metadata.compatibility_flags = [...flags];
+
+  // Workers 跟踪 / 日志开关（缺省均开启，与 store 部署一致）。
+  // 注意：Cloudflare 不会从上传脚本的 metadata 读取 observability，必须等脚本上传成功后
+  // 通过独立的 settings/observability 端点设置（见下方上传成功后的调用）。
+  const tracesEnabled = options?.traces !== false;   // Workers 跟踪
+  const logsEnabled = options?.logs !== false;        // Workers 日志
+
   if (options?.env) {
     metadata.bindings = [
       ...(options.bindings || []),
@@ -140,10 +191,69 @@ export async function deployWorker(
     throw new Error(`worker-script-upload failed: ${describeError(err)}`);
   }
   if (!resp.ok) { const errBody = await resp.text(); throw new Error(`Worker 部署失败 (${resp.status}): ${errBody}`); }
+
+  // 设置可观测性（Workers 跟踪 + 日志）。Cloudflare 不读取上传 metadata 中的 observability，
+  // 必须通过独立的 PATCH script-settings 端点设置（observability 作为嵌套字段）；脚本上传成功后再调用。
+  // 两者都关闭时跳过调用，避免无谓的 API 请求（及账户无权限时的报错）。
+  if (tracesEnabled || logsEnabled) {
+    // 顶层 enabled 是总开关，任一子项开启都必须为 true；traces/logs 需作为独立子对象发送。
+    const obsBody: Record<string, unknown> = { enabled: true, head_sampling_rate: 1 };
+    if (tracesEnabled) obsBody.traces = { enabled: true, persist: true, head_sampling_rate: 1 };
+    if (logsEnabled) obsBody.logs = { enabled: true, persist: true, invocation_logs: true, head_sampling_rate: 1 };
+    await cfFetch(account, `/accounts/${accountId}/workers/scripts/${name}/script-settings`, encryptionKey, {
+      method: 'PATCH', body: JSON.stringify({ observability: obsBody }),
+    });
+  }
+
+  // 从 PUT 响应中提取 version_id（版本化 API 下需要用它创建 deployment）
+  // 注意：result.id 是脚本名（如 "smail"），不是 version_id，不能用作回退
+  let versionId: string | undefined;
+  try {
+    const respJson = await resp.json() as any;
+    versionId = respJson?.result?.version_id || respJson?.result?.version?.id;
+  } catch { /* 响应非 JSON，跳过 */ }
+
   // 启用 workers.dev 子域，使 Worker 立即可访问（与 backend deployWorker 行为一致）
   try {
     await cfFetch(account, `/accounts/${accountId}/workers/scripts/${name}/subdomain`, encryptionKey, {
       method: 'POST', body: JSON.stringify({ enabled: true, previews_enabled: true }),
     });
   } catch (_) { /* soft fail */ }
+
+  // 创建 deployment：版本化 API 下 PUT 只创建版本不部署，必须显式创建 deployment 才能上线。
+  // 经典 API 下 PUT 已直接部署，createDeployment 仅用于版本追踪（非必需）。
+  // 必须有 version_id 才能创建 deployment，否则 API 报 versions:[] 无效。
+  try {
+    // 若 PUT 响应未携带 version_id，查询版本列表获取最新版本 ID
+    if (!versionId) {
+      try {
+        const versionsResp = await cfFetchRaw(account, `/accounts/${accountId}/workers/scripts/${name}/versions`, encryptionKey);
+        if (versionsResp.ok) {
+          const versionsJson = await versionsResp.json() as any;
+          const versions = versionsJson?.result || [];
+          if (versions.length > 0) {
+            versionId = versions[0]?.id; // 版本列表按 created_on 降序，首个即最新
+          }
+        }
+      } catch {
+        // 经典模式：versions 端点不可用，PUT 已直接部署
+      }
+    }
+
+    // 有 version_id 才发 deployment 请求；没有则跳过（PUT 已部署，createDeployment 非必需）
+    if (versionId) {
+      const depResp = await cfFetchRaw(account, `/accounts/${accountId}/workers/scripts/${name}/deployments`, encryptionKey, {
+        method: 'POST', body: JSON.stringify({
+          strategy: 'percentage',
+          versions: [{ percentage: 100, version_id: versionId }],
+        }),
+      });
+      if (!depResp.ok) {
+        const depTxt = await depResp.text();
+        console.warn(`[Worker Deploy] Deployment creation failed for ${name}: ${depResp.status} ${depTxt.slice(0, 300)}`);
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[Worker Deploy] Deployment creation warning for ${name}: ${e.message}`);
+  }
 }

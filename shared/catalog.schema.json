@@ -89,6 +89,12 @@
         "homepage": { "type": "string", "format": "uri", "description": "项目主页/仓库地址。前端用于「访问仓库」按钮及详情页「前往源仓库」链接" },
         "readmeUrl": { "type": "string", "format": "uri", "description": "README 原始内容地址（如 raw.githubusercontent.com），详情页加载 README 时使用" },
         "type": { "enum": ["worker", "pages", "hybrid"] },
+        "compatibility_date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "Worker 兼容性日期。缺省时部署端使用较新的安全默认值（'2024-11-01'）。React Router v7 / 含 node 构建产物的 worker 通常需要更新的日期。" },
+        "compatibility_flags": {
+          "type": "array",
+          "description": "Worker 兼容性标志，如 [\"nodejs_compat\"]。含 CJS 互操作（require/__commonJS）或访问 process/Buffer 等 node 内置的 worker 必须开启 nodejs_compat，否则运行时抛异常（Error 1101）。",
+          "items": { "type": "string" }
+        },
         "source": { "$ref": "#/$defs/source", "description": "部署源码（非 hybrid 类型使用）。当 homepage 未填时，source.url 兜底作为仓库入口" },
         "sources": {
           "type": "object",

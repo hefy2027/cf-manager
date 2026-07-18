@@ -13,6 +13,8 @@ export interface DeployOptions {
   bindingSelections: Record<string, { mode: 'auto' | 'existing'; existingId?: string; runInitSql?: boolean }>;
   secretValues: Record<string, string>;
   deployType?: 'worker' | 'pages' | 'both';
+  traces?: boolean;          // Workers 跟踪（默认开启）
+  logs?: boolean;            // Workers 日志（默认开启）
 }
 
 interface ResolvedBinding {
@@ -284,7 +286,7 @@ async function deployPagesArtifact(
 // --- Main deploy ---
 
 export async function deployTemplate(opts: DeployOptions): Promise<DeployResult> {
-  const { account, template, name, bindingSelections, secretValues, deployType } = opts;
+  const { account, template, name, bindingSelections, secretValues, deployType, traces, logs } = opts;
   if (!validatePagesProjectName(name)) {
     return { success: false, error: '项目名只能包含小写字母、数字和连字符，且以字母或数字开头', warnings: [], bindings: [] };
   }
@@ -327,6 +329,10 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
         ...(src?.mainModule ? { mainModule: src.mainModule } : {}),
         bindings: resolvedBindings.map(b => b.cfBinding),
         env: template.env,
+        ...(template.compatibility_date ? { compatibilityDate: template.compatibility_date } : {}),
+        ...(template.compatibility_flags?.length ? { compatibilityFlags: template.compatibility_flags } : {}),
+        traces: traces !== false,
+        logs: logs !== false,
         createDeployment: true,
         deploymentAnnotation: { 'cf-manager/store': template.id },
         assets: template.assets as any,
