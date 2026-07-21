@@ -44,7 +44,7 @@
       :row-key="(row: any) => row.id"
     />
 
-    <n-modal v-model:show="showAddModal" preset="dialog" title="添加账号" style="width: 500px; max-width: 95vw">
+    <n-modal v-model:show="showAddModal" preset="dialog" :title="editingId === null ? '添加账号' : '编辑账号'" style="width: 500px; max-width: 95vw">
       <n-form :model="form" label-placement="left" label-width="100">
         <n-form-item label="名称">
           <n-input v-model:value="form.name" placeholder="账号名称" />
@@ -53,15 +53,15 @@
           <n-select v-model:value="form.auth_type" :options="authTypeOptions" />
         </n-form-item>
         <n-form-item v-if="form.auth_type === 'token'" label="API Token">
-          <n-input v-model:value="form.api_token" type="password" show-password-on="click" placeholder="Cloudflare API Token" />
-        </n-form-item>
-        <n-form-item v-if="form.auth_type === 'global_key'" label="API Key">
-          <n-input v-model:value="form.api_key" type="password" show-password-on="click" placeholder="Cloudflare API Key" />
+          <n-input v-model:value="form.api_token" type="password" show-password-on="click" :placeholder="editingId === null ? 'Cloudflare API Token' : '不填则保留原 Token'" />
         </n-form-item>
         <n-form-item v-if="form.auth_type === 'global_key'" label="Email">
-          <n-input v-model:value="form.email" placeholder="Cloudflare 账号邮箱" />
+          <n-input v-model:value="form.email" :placeholder="editingId === null ? 'Cloudflare 账号邮箱' : (editingOriginalEmail ? `原邮箱: ${editingOriginalEmail}，不填则保留` : '不填则保留原邮箱')" />
         </n-form-item>
-        <n-form-item label="启用功能">
+        <n-form-item v-if="form.auth_type === 'global_key'" label="API Key">
+          <n-input v-model:value="form.api_key" type="password" show-password-on="click" :placeholder="editingId === null ? 'Cloudflare API Key' : '不填则保留原 Key'" />
+        </n-form-item>
+        <n-form-item v-if="editingId === null" label="启用功能">
           <n-checkbox-group v-model:value="form.features">
             <n-space>
               <n-checkbox v-for="f in featureOptions" :key="f.value" :value="f.value" :label="f.label" />
@@ -71,7 +71,7 @@
       </n-form>
       <template #action>
         <n-button @click="showAddModal = false">取消</n-button>
-        <n-button type="primary" :loading="submitting" @click="handleAdd">提交</n-button>
+        <n-button type="primary" :loading="submitting" @click="handleSubmit">提交</n-button>
       </template>
     </n-modal>
 
@@ -216,6 +216,8 @@ import { useAccountStore } from '../stores/accountStore';
 const accountStore = useAccountStore();
 const message = useMessage();
 const showAddModal = ref(false);
+const editingId = ref<number | null>(null);
+const editingOriginalEmail = ref<string>('');
 const showFeatureModal = ref(false);
 const showImportModal = ref(false);
 const showBatchResultModal = ref(false);
@@ -323,7 +325,7 @@ function resetForm() {
   form.value = { name: '', auth_type: 'token', api_token: '', api_key: '', email: '', features: ['ai', 'workers', 'browser_render', 'dns', 'storage'] };
 }
 
-async function handleAdd() {
+async function handleSubmit() {
   if (!form.value.name) {
     message.warning('请输入账号名称');
     return;
@@ -331,13 +333,42 @@ async function handleAdd() {
   submitting.value = true;
   try {
     const { features, ...rest } = form.value;
-    await accountStore.createAccount({ ...rest, enabled_features: features.join(',') });
-    message.success('账号添加成功');
+    const payload: any = { name: rest.name, auth_type: rest.auth_type };
+    // 仅发送用户实际填写的凭证字段；空串一律剔除，避免覆盖原凭证
+    if (rest.auth_type === 'token') {
+      if (rest.api_token) payload.api_token = rest.api_token;
+    } else {
+      if (rest.api_key) payload.api_key = rest.api_key;
+      if (rest.email) payload.email = rest.email;
+    }
+    if (editingId.value === null) {
+      // 添加模式：凭证必填（后端校验）
+      await accountStore.createAccount({ ...payload, enabled_features: features.join(',') });
+      message.success('账号添加成功');
+    } else {
+      await accountStore.updateAccount(editingId.value, payload);
+      message.success('账号更新成功');
+    }
     showAddModal.value = false;
     resetForm();
+    editingId.value = null;
   } finally {
     submitting.value = false;
   }
+}
+
+function openAccountEditor(row: any) {
+  editingId.value = row.id;
+  editingOriginalEmail.value = row.email || '';
+  form.value = {
+    name: row.name,
+    auth_type: row.auth_type,
+    api_token: '',
+    api_key: '',
+    email: '',
+    features: parseFeatures(row.enabled_features),
+  };
+  showAddModal.value = true;
 }
 
 function openFeatureEditor(row: any) {
@@ -464,14 +495,20 @@ const columns: DataTableColumns<any> = [
   { title: 'Account ID', key: 'account_id', width: 180, ellipsis: { tooltip: true }, render: (row) => row.account_id || '-' },
   { title: '认证类型', key: 'auth_type', width: 120, render: (row) => h(NTag, { size: 'small', type: row.auth_type === 'token' ? 'info' : 'warning' }, { default: () => row.auth_type === 'token' ? 'Token' : 'Key' }) },
   {
-    title: '功能', key: 'enabled_features', width: 200,
+    title: '功能', key: 'enabled_features', width: 220,
     render: (row) => {
       const features = parseFeatures(row.enabled_features);
-      return h(NSpace, { size: 4 }, {
-        default: () => features.map(f =>
-          h(NTag, { size: 'small', type: 'success', bordered: false }, { default: () => featureLabelMap[f] || f })
-        ),
-      });
+      const tags = features.map(f =>
+        h(NTag, { size: 'small', type: 'success', bordered: false }, { default: () => featureLabelMap[f] || f })
+      );
+      // R2 付费能力标识（与 enabled_features 区分）
+      const af = (row.available_features || '').split(',').filter(Boolean);
+      if (af.includes('r2')) {
+        tags.push(h(NTag, { size: 'small', type: 'info', bordered: false }, { default: () => 'R2' }));
+      } else if (af.includes('-r2')) {
+        tags.push(h(NTag, { size: 'small', type: 'default', bordered: false, style: 'text-decoration: line-through; opacity: 0.5' }, { default: () => 'R2' }));
+      }
+      return h(NSpace, { size: 4 }, { default: () => tags });
     },
   },
   { title: '状态', key: 'is_active', width: 80, render: (row) => {
@@ -517,6 +554,7 @@ const columns: DataTableColumns<any> = [
           row.is_demo
             ? null
             : h(NButton, { size: 'small', type: 'info', ghost: true, onClick: () => handleViewCredentials(row) }, { default: () => '查看Key' }),
+          h(NButton, { size: 'small', type: 'primary', ghost: true, disabled: row.is_demo, onClick: () => openAccountEditor(row) }, { default: () => '编辑' }),
           h(NButton, { size: 'small', disabled: row.is_demo, onClick: () => openFeatureEditor(row) }, { default: () => '功能' }),
           h(NButton, { size: 'small', onClick: () => handleTest(row) }, { default: () => '测试' }),
           isExhausted

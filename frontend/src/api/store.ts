@@ -21,5 +21,7 @@ export const storeApi = {
     bindingSelections?: Record<string, any>;
     secretValues?: Record<string, string>;
     deployType?: 'worker' | 'pages' | 'both';
+    traces?: boolean;   // Workers 跟踪（默认开启）
+    logs?: boolean;     // Workers 日志（默认开启）
   }) => apiClient.post('/store/deploy', data, { timeout: 120000 }),
 };

@@ -111,6 +111,11 @@
                     <n-text>预览部署：</n-text>
                     <n-tag :type="subdomainInfo.previews_enabled ? 'success' : 'default'">{{ subdomainInfo.previews_enabled ? '已启用' : '未启用' }}</n-tag>
                   </n-space>
+                  <n-space v-if="subdomainInfo.url" align="center">
+                    <n-text>访问地址：</n-text>
+                    <n-a :href="subdomainInfo.url" target="_blank" type="primary">{{ subdomainInfo.url }}</n-a>
+                  </n-space>
+                  <n-text v-if="subdomainInfo && !subdomainInfo.url && subdomainInfo.accountSubdomain === ''" depth="3" style="font-size: 12px;">账户子域名未配置，无法显示 workers.dev 访问地址</n-text>
                 </n-space>
               </n-card>
             </n-spin>
@@ -521,6 +526,9 @@ async function toggleSubdomain(val: boolean) {
     loadSubdomain();
   } finally { subdomainSaving.value = false; }
 }
+
+
+
 
 async function loadScriptSettings() {
   scriptSettingsLoading.value = true;

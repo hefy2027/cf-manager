@@ -11,6 +11,7 @@ export const accountsApi = {
   getAll: (params: AccountListParams = {}) =>
     apiClient.get('/accounts', { params }),
   create: (data: any) => apiClient.post('/accounts', data),
+  update: (id: number, data: any) => apiClient.put(`/accounts/${id}`, data),
   delete: (id: number) => apiClient.delete(`/accounts/${id}`),
   test: (id: number) => apiClient.post(`/accounts/${id}/test`),
   testBatch: (data: { ids?: number[]; onlyUnverified?: boolean }) =>

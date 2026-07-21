@@ -5,6 +5,7 @@ import { cfFetch, cfFetchRaw, cfFetchAll } from '../services/cfApi';
 import { getWorkersUsageToday } from '../services/quotaTracker';
 import { demoDestructiveGuard } from '../services/demo';
 import { deployPages, extractZipFiles, validatePagesProjectName, ensurePagesProject } from '../services/pagesDeploy';
+import { deployWorker } from '../services/assetsDeploy';
 import { fetchScriptSafely } from '../services/ssrfGuard';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -53,14 +54,23 @@ app.post('/:accountId/workers', async (c) => {
   const contentType = c.req.header('content-type') || '';
 
   let name: string;
-  let scriptContent: string;
+  let scriptContent = '';
   let deploySource = 'upload';
+  let assetsOpts: any;
+  let mainModule: string | undefined;
+  let deployed = false;
 
   if (contentType.includes('multipart/form-data')) {
     const formData = await c.req.formData();
     name = formData.get('name') as string;
     const url = formData.get('url') as string;
     const file = formData.get('script') as File | null;
+    const assetsFile = formData.get('assets') as File | null;
+    if (assetsFile) {
+      const buf = new Uint8Array(await assetsFile.arrayBuffer());
+      assetsOpts = { assets: { source: { kind: assetsFile.name.toLowerCase().endsWith('.zip') ? 'zip' : 'raw', url: assetsFile.name }, assetsBuffer: buf } };
+    }
+    mainModule = formData.get('mainModule') as string || undefined;
     if (!name) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Worker name is required' } }, 400);
     if (url) {
       deploySource = `url=${url}`;
@@ -71,7 +81,14 @@ app.post('/:accountId/workers', async (c) => {
         return c.json({ error: { code, message: e.message } }, e.statusCode || 400);
       }
     } else if (file) {
-      scriptContent = await file.text();
+      const isZip = file.name.toLowerCase().endsWith('.zip');
+      if (isZip) {
+        const buf = new Uint8Array(await file.arrayBuffer());
+        await deployWorker(account, c.env.ENCRYPTION_KEY, name, new Uint8Array(0), { ...assetsOpts, packageZip: buf, mainModule });
+        deployed = true;
+      } else {
+        scriptContent = await file.text();
+      }
     } else {
       return c.json({ error: { code: 'NO_FILE', message: 'Script file or URL is required' } }, 400);
     }
@@ -92,27 +109,12 @@ app.post('/:accountId/workers', async (c) => {
     }
   }
 
-  const metadata = JSON.stringify({ main_module: 'worker.js', compatibility_date: '2024-01-01' });
-  const form = new FormData();
-  form.append('metadata', new Blob([metadata], { type: 'application/json' }));
-  form.append('worker.js', new Blob([scriptContent], { type: 'application/javascript+module' }), 'worker.js');
-
-  const resp = await cfFetchRaw(account, `/accounts/${account.account_id}/workers/scripts/${name}`, c.env.ENCRYPTION_KEY, {
-    method: 'PUT', body: form,
-  });
-  const result = await resp.json();
-
-  // Enable workers.dev subdomain so the Worker is accessible immediately (matches backend behavior)
-  try {
-    await cfFetch(account, `/accounts/${account.account_id}/workers/scripts/${name}/subdomain`, c.env.ENCRYPTION_KEY, {
-      method: 'POST', body: JSON.stringify({ enabled: true, previews_enabled: true }),
-    });
-  } catch (_) {
-    // Soft fail: user can still enable manually from settings drawer
+  if (!deployed) {
+    await deployWorker(account, c.env.ENCRYPTION_KEY, name, new TextEncoder().encode(scriptContent), { ...assetsOpts, mainModule });
   }
 
-  await addAuditLog(c.env.DB, { account_id: account.id, action: 'deploy_worker', target: name, detail: deploySource, status: 'success' });
-  return c.json(result, 201);
+  await addAuditLog(c.env.DB, { account_id: account.id, action: 'deploy_worker', target: name, detail: deploySource + (assetsOpts ? ',with_assets' : ''), status: 'success' });
+  return c.json({ success: true }, 201);
 });
 
 // ============ Delete Worker/Pages ============
@@ -377,6 +379,11 @@ app.get('/:accountId/resources/d1', async (c) => {
 
 app.get('/:accountId/resources/r2', async (c) => {
   const account = await requireAccount(c);
+  // 短路：缓存显示 R2 不可用则直接返回
+  const r2Features = (account.available_features || '').split(',');
+  if (r2Features.includes('-r2')) {
+    return c.json({ r2_not_enabled: true, buckets: [] });
+  }
   try {
     const data = await cfFetch<{ result: any }>(account, `/accounts/${account.account_id}/r2/buckets`, c.env.ENCRYPTION_KEY);
     return c.json(data.result?.buckets || []);
@@ -489,11 +496,17 @@ app.post('/batch-deploy', async (c) => {
   let scriptContent: string | null = null;
   let scriptUrl: string | null = null;
 
+  let assetsOpts: any;
   if (contentType.includes('multipart/form-data')) {
     const form = await c.req.formData();
     targets = JSON.parse(form.get('targets') as string);
     scriptUrl = form.get('url') as string | null;
     const file = form.get('script') as File | null;
+    const assetsFile = form.get('assets') as File | null;
+    if (assetsFile) {
+      const buf = new Uint8Array(await assetsFile.arrayBuffer());
+      assetsOpts = { assets: { source: { kind: assetsFile.name.toLowerCase().endsWith('.zip') ? 'zip' : 'raw', url: assetsFile.name }, assetsBuffer: buf } };
+    }
     if (file) scriptContent = await file.text();
   } else {
     const body = await c.req.json();
@@ -518,22 +531,9 @@ app.post('/batch-deploy', async (c) => {
     try {
       const account = await getAccountById(c.env.DB, t.accountId);
       if (!account) return { ...t, success: false, error: 'Account not found' };
-      const metadata = JSON.stringify({ main_module: 'worker.js', compatibility_date: '2024-01-01' });
-      const form = new FormData();
-      form.append('metadata', new Blob([metadata], { type: 'application/json' }));
-      form.append('worker.js', new Blob([scriptContent!], { type: 'application/javascript+module' }), 'worker.js');
-      await cfFetchRaw(account, `/accounts/${account.account_id}/workers/scripts/${t.workerName}`, c.env.ENCRYPTION_KEY, { method: 'PUT', body: form });
+      await deployWorker(account, c.env.ENCRYPTION_KEY, t.workerName, new TextEncoder().encode(scriptContent!), assetsOpts);
 
-      // Enable workers.dev subdomain so the Worker is accessible immediately (matches backend behavior)
-      try {
-        await cfFetch(account, `/accounts/${account.account_id}/workers/scripts/${t.workerName}/subdomain`, c.env.ENCRYPTION_KEY, {
-          method: 'POST', body: JSON.stringify({ enabled: true, previews_enabled: true }),
-        });
-      } catch (_) {
-        // Soft fail: user can still enable manually from settings drawer
-      }
-
-      await addAuditLog(c.env.DB, { account_id: account.id, action: 'batch_deploy', target: t.workerName, detail: scriptUrl ? `url=${scriptUrl}` : 'upload', status: 'success' });
+      await addAuditLog(c.env.DB, { account_id: account.id, action: 'batch_deploy', target: t.workerName, detail: (scriptUrl ? `url=${scriptUrl}` : 'upload') + (assetsOpts ? ',with_assets' : ''), status: 'success' });
       return { ...t, success: true };
     } catch (err: any) {
       return { ...t, success: false, error: err.message };

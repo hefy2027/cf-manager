@@ -5,87 +5,16 @@ import { fetchScriptSafely } from './ssrfGuard';
 import { getAllZones } from './accountRouter';
 import path from 'path';
 import { File } from 'node:buffer';
-import { blake3 } from 'hash-wasm';
 import { appLogger } from './logger';
-import AdmZip from 'adm-zip';
+import { computeStaticAssetHash, getContentType, extractZipFiles } from './staticAssets';
+export { extractZipFiles };
 
 // Pages 项目名称校验：Cloudflare 要求 ^[a-z0-9][a-z0-9-]*$
 export function validatePagesProjectName(name: string): boolean {
   return /^[a-z0-9][a-z0-9-]*$/.test(name);
 }
 
-// 从 zip buffer 解压文件，自动检测并剥离公共顶层目录前缀。
-// 例如所有条目都在 dist/ 下时，返回的 path 会去掉 dist/ 前缀。
-export function extractZipFiles(zipBuffer: Buffer): Array<{ path: string; buffer: Buffer }> {
-  const zip = new AdmZip(zipBuffer);
-  const entries = zip.getEntries().filter(e => !e.isDirectory);
-  const filePaths = entries.map(e => e.entryName.replace(/\\/g, '/'));
 
-  // 检测公共前缀
-  let prefix = '';
-  if (filePaths.length > 0) {
-    const parts = filePaths[0].split('/');
-    if (parts.length > 1) {
-      const candidate = parts[0] + '/';
-      if (filePaths.every(p => p.startsWith(candidate))) {
-        prefix = candidate;
-      }
-    }
-  }
-
-  const files: Array<{ path: string; buffer: Buffer }> = [];
-  for (const entry of entries) {
-    const p = entry.entryName.replace(/\\/g, '/');
-    const finalPath = prefix ? p.slice(prefix.length) : p;
-    if (finalPath) { // 跳过空路径（如前缀目录本身）
-      files.push({ path: finalPath, buffer: entry.getData() });
-    }
-  }
-  return files;
-}
-
-// MIME type lookup — 四步上传法中 contentType 作为 metadata 存入资产存储，
-// Cloudflare 按此值设置响应 Content-Type。若全部返回 octet-stream → 浏览器直接下载。
-function getContentType(filename: string): string {
-  const ext = filename.split('.').pop()?.toLowerCase() || '';
-  const types: Record<string, string> = {
-    html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8',
-    css: 'text/css; charset=utf-8',
-    js: 'application/javascript; charset=utf-8', mjs: 'application/javascript; charset=utf-8',
-    json: 'application/json; charset=utf-8', xml: 'application/xml; charset=utf-8',
-    txt: 'text/plain; charset=utf-8', csv: 'text/csv; charset=utf-8',
-    svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
-    gif: 'image/gif', ico: 'image/x-icon', webp: 'image/webp', avif: 'image/avif',
-    bmp: 'image/bmp', tiff: 'image/tiff',
-    woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf',
-    eot: 'application/vnd.ms-fontobject',
-    mp4: 'video/mp4', webm: 'video/webm', ogv: 'video/ogg',
-    mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav', flac: 'audio/flac',
-    pdf: 'application/pdf', wasm: 'application/wasm',
-    map: 'application/json',
-  };
-  return types[ext] || 'application/octet-stream';
-}
-
-// 与 wrangler 同款资产哈希（@cloudflare/deploy-helpers 的 hashFile，全链路唯一使用的算法）：
-//   hash = blake3(base64(content) + extension).hex().slice(0, 32)
-// Cloudflare 资产存储按此算法做内容寻址，manifest 的 hash 必须与之匹配，否则运行时按 hash 取内容失败 → 404。
-// async function computePageAssetHash(buffer: Buffer, filePath: string): Promise<string> {
-//   const base64Contents = buffer.toString('base64');
-//   const extension = path.extname(filePath).substring(1);
-//   const fullHash = await blake3(Buffer.from(base64Contents + extension, 'utf8'));
-//   return fullHash.slice(0, 32);
-// }
-
-// 与 wrangler (@cloudflare/deploy-helpers hashFile) 完全一致：
-//   hash = blake3(base64(content) + extension).hex().slice(0, 32)
-// Cloudflare 资产存储按此算法做内容寻址，manifest 的 hash 必须与之匹配，否则运行时按 hash 取内容失败 → 404。
-async function computePageAssetHash(buffer: Buffer, filePath: string): Promise<string> {
-  const base64Contents = buffer.toString('base64');
-  const extension = path.extname(filePath).substring(1);
-  const fullHash = await blake3(base64Contents + extension);
-  return fullHash.slice(0, 32);
-}
 
 // Node `Buffer` is not directly assignable to the DOM `BlobPart` type under strict mode
 // (its backing store is typed as `ArrayBufferLike`, which may be a `SharedArrayBuffer`).
@@ -109,9 +38,32 @@ export interface DeployWorkerOptions {
   bindings?: Record<string, unknown>[];
   env?: Record<string, string>;
   compatibilityDate?: string;
+  compatibilityFlags?: string[];
   enableSubdomain?: boolean;
   createDeployment?: boolean;
   deploymentAnnotation?: Record<string, string>;
+}
+
+
+// Worker with Assets 的静态资源来源（复用 catalog 的 #/$defs/source 形态）。
+export interface WorkerAssetsInput {
+  source: { kind: string; url: string; assetName?: string; subPath?: string };
+  binding?: string;
+  config?: { html_handling?: string; not_found_handling?: string };
+}
+
+
+
+// 构造 Workers Assets manifest：路径以 "/" 开头，hash 与后端/Worker 资产算法一致。
+export async function buildAssetsManifest(
+  files: Array<{ path: string; buffer: Buffer }>,
+): Promise<Record<string, { hash: string; size: number }>> {
+  const manifest: Record<string, { hash: string; size: number }> = {};
+  for (const f of files) {
+    const key = '/' + f.path.replace(/\\/g, '/').replace(/^\/+/, '');
+    manifest[key] = { hash: await computeStaticAssetHash(f.buffer, f.path), size: f.buffer.length };
+  }
+  return manifest;
 }
 
 export interface DeployWorkerResult {
@@ -168,22 +120,159 @@ async function getAccountSubdomain(account: Account): Promise<string> {
   }
 }
 
+// 三阶段上传 Worker 静态资源（与 wrangler 同款）：
+//   1) POST .../assets-upload-session 提交 manifest → 返回 { jwt, buckets }
+//      - buckets 非空：jwt 是 upload token，需按 buckets 分批上传缺失文件
+//      - buckets 为空：所有资源已存在，jwt 直接就是 completion token，跳过阶段 2
+//   2) POST .../workers/assets/upload?base64=true 按 bucket 分批 multipart 上传（field=hash, value=base64）
+//   3) 返回 completion jwt，挂到 metadata.assets.jwt
+async function deployWorkerAssets(
+  account: Account,
+  scriptName: string,
+  files: Array<{ path: string; buffer: Buffer }>,
+): Promise<{ jwt: string }> {
+  const authHeaders = getAuthHeaders(account);
+  const accountId = account.account_id!;
+
+  // 预计算 hash → buffer 映射，用于按 buckets 选择性上传
+  const manifest = await buildAssetsManifest(files);
+  const hashToBuffer = new Map<string, Buffer>();
+  for (const f of files) {
+    const hash = await computeStaticAssetHash(f.buffer, f.path);
+    if (!hashToBuffer.has(hash)) hashToBuffer.set(hash, f.buffer);
+  }
+
+  const sessionResp = await fetch(`${CF_BASE}/accounts/${accountId}/workers/scripts/${scriptName}/assets-upload-session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
+    body: JSON.stringify({ manifest }),
+  });
+  const sessionJson = await sessionResp.json() as any;
+  const sessionJwt: string | undefined = sessionJson?.result?.jwt;
+  const buckets: string[][] = sessionJson?.result?.buckets || [];
+  if (!sessionResp.ok || !sessionJson?.success || !sessionJwt) {
+    throw new Error(
+      `assets-upload-session failed: status=${sessionResp.status} success=${sessionJson?.success} ` +
+      `hasJwt=${!!sessionJwt} errors=${JSON.stringify(sessionJson?.errors || sessionJson?.messages || '').slice(0, 400)}`,
+    );
+  }
+
+  // buckets 为空 → 所有资源已存在，sessionJwt 即为 completion token，直接返回（跳过上传）
+  if (buckets.length === 0) {
+    appLogger.info(`[Worker Assets] All ${files.length} assets already uploaded, using completion JWT directly`);
+    return { jwt: sessionJwt };
+  }
+
+  // 按 buckets 分批上传：每个 bucket 是一批需要一起上传的 hash 列表
+  const totalHashes = buckets.reduce((n, b) => n + b.length, 0);
+  appLogger.info(`[Worker Assets] Uploading ${totalHashes} assets in ${buckets.length} bucket(s)`);
+  let completionJwt: string | undefined;
+  for (let bi = 0; bi < buckets.length; bi++) {
+    const bucket = buckets[bi];
+    const upForm = new FormData();
+    for (const hash of bucket) {
+      const buf = hashToBuffer.get(hash);
+      if (!buf) {
+        appLogger.warn(`[Worker Assets] Hash ${hash} not found in local files, skipping`);
+        continue;
+      }
+      upForm.append(hash, new Blob([buf.toString('base64')], { type: 'application/octet-stream' }), hash);
+    }
+    const upResp = await fetch(`${CF_BASE}/accounts/${accountId}/workers/assets/upload?base64=true`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${sessionJwt}` },
+      body: upForm,
+    });
+    if (!upResp.ok) {
+      const txt = await upResp.text();
+      throw new Error(`assets upload failed (bucket ${bi + 1}/${buckets.length}): ${upResp.status} ${txt} (uploadJwtLen=${sessionJwt.length})`);
+    }
+    const upJson = await upResp.json() as any;
+    completionJwt = upJson.jwt ?? upJson.result?.jwt;
+  }
+  if (!completionJwt) throw new Error(`assets upload response missing completion jwt`);
+  return { jwt: completionJwt };
+}
+
+// 下载 assets 产物（zip 或 raw 单文件），与 catalogDeploy 的 downloadArtifact 同源。
+async function downloadArtifactForAssets(src: WorkerAssetsInput['source']): Promise<Buffer> {
+  const resp = await proxyFetch(src.url, {}, 30000);
+  if (!resp.ok) throw new Error(`assets 产物下载失败: ${resp.status}`);
+  return Buffer.from(await resp.arrayBuffer());
+}
+
+// 推断多模块入口文件名：优先显式 mainModule；其次 wrangler.toml/jsonc 的 main 字段；
+// 仅 1 个模块时直接用；多模块时按常见入口名优先级（worker.js → index.js/index.mjs → 根目录首个 JS）查找；最后回退 'worker.js'。
+function resolveMainModule(modules: Array<{ path: string; buffer: Buffer }> | null, explicit?: string): string {
+  if (explicit) return explicit;
+  if (!modules || modules.length === 0) return 'worker.js';
+  const conf = modules.find(m => /^wrangler\.(toml|jsonc|json)$/i.test(m.path));
+  if (conf) {
+    const txt = conf.buffer.toString('utf-8');
+    const m = txt.match(/^\s*main\s*=\s*"([^"]+)"/m) || txt.match(/"main"\s*:\s*"([^"]+)"/m);
+    if (m) return m[1].replace(/^\.\//, '');
+  }
+  if (modules.length === 1) return modules[0].path;
+  const candidates = ['worker.js', 'index.js', 'index.mjs', 'worker.mjs', 'index.cjs', 'worker.cjs'];
+  for (const c of candidates) {
+    if (modules.some(m => m.path === c)) return c;
+  }
+  const root = modules.find(m => /^[^/\\]+\.(m?js|cjs)$/i.test(m.path));
+  if (root) return root.path;
+  return 'worker.js';
+}
+
 export async function deployWorker(
   account: Account,
   name: string,
   scriptContent: string | Buffer,
-  options?: DeployWorkerOptions,
+  options?: DeployWorkerOptions & {
+    packageZip?: Buffer;        // 多模块 zip：本地解压后每个文件作为一个 files= part（与 wrangler 本地解包一致）
+    mainModule?: string;        // 多模块入口文件名（默认从 zip 推断，回退 'worker.js'）
+    assets?: WorkerAssetsInput;
+    assetsBuffer?: Buffer;
+    traces?: boolean;           // Workers 跟踪（Workers Observability，含链路追踪/指标）。默认开启
+    logs?: boolean;             // Workers 日志（嵌套在 observability.logs.invocation_logs）。默认开启
+  },
 ): Promise<DeployWorkerResult> {
   const accountId = account.account_id;
   if (!accountId) throw new Error('Account ID is required');
   const cf = getCfClient(account);
   const authHeaders = getAuthHeaders(account);
 
+  // 多模块：若提供 packageZip，本地解压为多个模块文件（与 wrangler 行为一致）。
+  const moduleParts = options?.packageZip ? extractZipFiles(options.packageZip) : null;
+  const mainModule = resolveMainModule(moduleParts, options?.mainModule);
+
+  // 推断需要的兼容性标志：含 CJS 互操作（__commonJS/require）或访问 process/Buffer/node:
+  // 构建产物（如 React Router v7 on Workers）必须开启 nodejs_compat，否则运行时抛异常（Error 1101）。
+  const flags = new Set<string>(options?.compatibilityFlags || []);
+  const probe = (buf: Uint8Array | Buffer | string) => {
+    const s = typeof buf === 'string' ? buf : Buffer.from(buf).toString('latin1');
+    // process\. 捕获 process.env / process.platform / process.versions 等所有 process 访问；
+    // global\.process 捕获打包器生成的 global.process 互操作。这些在未开启 nodejs_compat 时会抛 ReferenceError。
+    return /__commonJS|function __require|\brequire\(|from ["']node:|\bprocess\.|globalThis\.process|global\.process|\bBuffer\.|node:async_hooks/.test(s);
+  };
+  let needsNodeCompat = false;
+  if (moduleParts && moduleParts.length > 0) {
+    needsNodeCompat = moduleParts.some(m => probe(m.buffer));
+  } else if (scriptContent) {
+    needsNodeCompat = probe(scriptContent);
+  }
+  if (needsNodeCompat) flags.add('nodejs_compat');
+
   // Build metadata with optional bindings and env vars
   const metadata: any = {
-    main_module: 'worker.js',
-    compatibility_date: options?.compatibilityDate || '2024-01-01',
+    main_module: moduleParts && moduleParts.length > 0 ? mainModule : 'worker.js',
+    compatibility_date: options?.compatibilityDate || '2024-11-01',
   };
+  if (flags.size > 0) metadata.compatibility_flags = [...flags];
+
+  // Workers 跟踪 / 日志开关（缺省均开启，与 store 部署一致）。
+  // 注意：Cloudflare 不会从上传脚本的 metadata 读取 observability，必须等脚本上传成功后
+  // 通过独立的 settings/observability 端点设置（见下方提交上传后的 applyObservability）。
+  const tracesEnabled = options?.traces !== false;   // Workers 跟踪
+  const logsEnabled = options?.logs !== false;        // Workers 日志
 
   if (options?.bindings?.length) {
     metadata.bindings = options.bindings;
@@ -196,16 +285,46 @@ export async function deployWorker(
     ];
   }
 
-  // Convert content to Uint8Array for Blob (handles both string and Buffer)
-  const contentBytes = typeof scriptContent === 'string'
-    ? new TextEncoder().encode(scriptContent)
-    : new Uint8Array(scriptContent);
+  // Worker with Assets：可选静态资源三阶段上传，并注入 ASSETS 绑定（默认 ASSETS，可覆盖）。
+  if (options?.assets) {
+    const assetContent: Buffer = options.assetsBuffer
+      ? options.assetsBuffer
+      : await downloadArtifactForAssets(options.assets.source);
+    const assetFiles = options.assets.source.kind === 'raw'
+      ? [{ path: options.assets.source.url.split('/').pop() || 'asset', buffer: assetContent }]
+      : extractZipFiles(assetContent);
+    const { jwt } = await deployWorkerAssets(account, name, assetFiles);
+    metadata.assets = { jwt, config: options.assets.config || undefined };
+    metadata.bindings = [...(metadata.bindings || []), { name: options.assets.binding || 'ASSETS', type: 'assets' }];
+  }
+
+  // 多模块 zip（如 React Router on Workers）解压出的每个文件都要作为 Worker 模块上传：
+  // index.js 入口会 import assets/*.js 等代码分片，它们必须随脚本一起上传，否则 CF 报
+  // "No such module"。注意：静态资源（assets 绑定）由下面的 deployWorkerAssets 单独上传，
+  // 与这里的模块上传是两条独立通道，不要在此排除 assets/。
+  const moduleFiles = moduleParts;
 
   // Use raw fetch + FormData (same as Cloudflare wrangler does)
   // The SDK's scripts.update can mangle the multipart form in some versions
   const form = new FormData();
   form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-  form.append('worker.js', new Blob([contentBytes], { type: 'application/javascript+module' }), 'worker.js');
+
+  if (moduleFiles && moduleFiles.length > 0) {
+    // 多模块：zip 解压出的每个文件一个 files= part，main_module 指向入口文件
+    if (!moduleFiles.some(m => m.path === mainModule)) {
+      throw new Error(`main_module "${mainModule}" 未在 zip 模块中找到（已包含: ${moduleFiles.map(m => m.path).join(', ')}）`);
+    }
+    for (const m of moduleFiles) {
+      const isJs = /\.(m?js|cjs)$/i.test(m.path);
+      form.append(m.path, new Blob([bufferToBlobPart(m.buffer)], { type: isJs ? 'application/javascript+module' : 'application/octet-stream' }), m.path);
+    }
+  } else {
+    // 单模块（默认）：兼容旧路径，脚本内容即 worker.js
+    const contentBytes = typeof scriptContent === 'string'
+      ? new TextEncoder().encode(scriptContent)
+      : new Uint8Array(scriptContent);
+    form.append('worker.js', new Blob([contentBytes], { type: 'application/javascript+module' }), 'worker.js');
+  }
 
   const resp = await fetch(`${CF_BASE}/accounts/${accountId}/workers/scripts/${name}`, {
     method: 'PUT',
@@ -216,6 +335,31 @@ export async function deployWorker(
   if (!resp.ok || !respJson.success) {
     throw new Error(`${resp.status} ${JSON.stringify(respJson)}`);
   }
+
+  // 设置可观测性（Workers 跟踪 + 日志）。Cloudflare 不读取上传 metadata 中的 observability，
+  // 必须通过独立的 PATCH script-settings 端点设置（observability 作为嵌套字段）；脚本上传成功后再调用。
+  // 两者都关闭时跳过调用，避免无谓的 API 请求（及账户无权限时的报错）。
+  if (tracesEnabled || logsEnabled) {
+    // 顶层 enabled 是总开关，任一子项开启都必须为 true；traces/logs 需作为独立子对象发送。
+    const obsBody: Record<string, unknown> = { enabled: true, head_sampling_rate: 1 };
+    if (tracesEnabled) obsBody.traces = { enabled: true, persist: true, head_sampling_rate: 1 };
+    if (logsEnabled) obsBody.logs = { enabled: true, persist: true, invocation_logs: true, head_sampling_rate: 1 };
+    const obsResp = await fetch(`${CF_BASE}/accounts/${accountId}/workers/scripts/${name}/script-settings`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ observability: obsBody }),
+    });
+    if (!obsResp.ok) {
+      const obsErr = await obsResp.text();
+      throw new Error(`设置 Workers 可观测性失败 (${obsResp.status}): ${obsErr}`);
+    }
+  }
+
+  // 从 PUT 响应中提取 version_id（版本化 API 下需要用它创建 deployment）
+  // 注意：result.id 是脚本名（如 "smail"），不是 version_id，不能用作回退
+  let versionId: string | undefined =
+    respJson?.result?.version_id ||
+    respJson?.result?.version?.id;
 
   // Enable workers.dev subdomain so the Worker is accessible immediately
   let subdomain: string | undefined;
@@ -231,14 +375,45 @@ export async function deployWorker(
     subdomain = await getAccountSubdomain(account);
   }
 
-  // Create deployment (for version tracking)
+  // Create deployment：版本化 API 下 PUT 只创建版本不部署，必须显式创建 deployment 才能上线。
+  // 经典 API 下 PUT 已直接部署，createDeployment 仅用于版本追踪（非必需）。
+  // 必须有 version_id 才能创建 deployment，否则 API 报 versions:[] 无效。
   if (options?.createDeployment) {
     try {
-      await fetch(`${CF_BASE}/accounts/${accountId}/workers/scripts/${name}/deployments`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders },
-        body: JSON.stringify({ annotations: options.deploymentAnnotation || {} }),
-      });
+      // 若 PUT 响应未携带 version_id，查询版本列表获取最新版本 ID
+      if (!versionId) {
+        try {
+          const versionsResp = await fetch(`${CF_BASE}/accounts/${accountId}/workers/scripts/${name}/versions`, {
+            headers: authHeaders,
+          });
+          if (versionsResp.ok) {
+            const versionsJson = await versionsResp.json() as any;
+            const versions = versionsJson?.result || [];
+            if (versions.length > 0) {
+              versionId = versions[0]?.id; // 版本列表按 created_on 降序，首个即最新
+            }
+          }
+        } catch {
+          // 经典模式：versions 端点不可用，PUT 已直接部署
+        }
+      }
+
+      // 有 version_id 才发 deployment 请求；没有则跳过（PUT 已部署，createDeployment 非必需）
+      if (versionId) {
+        const depResp = await fetch(`${CF_BASE}/accounts/${accountId}/workers/scripts/${name}/deployments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders },
+          body: JSON.stringify({
+            strategy: 'percentage',
+            versions: [{ percentage: 100, version_id: versionId }],
+            annotations: options.deploymentAnnotation || {},
+          }),
+        });
+        if (!depResp.ok) {
+          const depTxt = await depResp.text();
+          appLogger.warn(`[Worker Deploy] Deployment creation failed for ${name}: ${depResp.status} ${depTxt.slice(0, 300)}`);
+        }
+      }
     } catch (e: any) {
       appLogger.warn(`[Worker Deploy] Deployment creation warning for ${name}: ${e.message}`);
     }
@@ -249,7 +424,7 @@ export async function deployWorker(
 
 // Deploy worker from URL: fetch JS from remote URL then upload
 export async function deployWorkerFromUrl(
-  account: Account, name: string, url: string, options?: DeployWorkerOptions,
+  account: Account, name: string, url: string, options?: DeployWorkerOptions & { assets?: WorkerAssetsInput; assetsBuffer?: Buffer },
 ): Promise<DeployWorkerResult> {
   const scriptContent = await fetchScriptSafely(url);
   return deployWorker(account, name, scriptContent, options);
@@ -349,7 +524,13 @@ export async function deleteDomain(account: Account, domainId: string): Promise<
 export async function getSubdomain(account: Account, scriptName: string): Promise<any> {
   const accountId = account.account_id;
   const cf = getCfClient(account);
-  return await cf.workers.scripts.subdomain.get(scriptName, { account_id: accountId! });
+  const raw: any = await cf.workers.scripts.subdomain.get(scriptName, { account_id: accountId! });
+  // 额外拉取账户级 workers.dev 子域名，供前端拼出完整 URL：https://<script>.<accountSubdomain>.workers.dev
+  const accountSubdomain = await getAccountSubdomain(account);
+  const enabled = raw?.enabled;
+  const previews_enabled = raw?.previews_enabled;
+  const url = accountSubdomain ? `https://${scriptName}.${accountSubdomain}.workers.dev` : '';
+  return { enabled, previews_enabled, accountSubdomain, url };
 }
 
 export async function setSubdomain(account: Account, scriptName: string, enabled: boolean): Promise<any> {
@@ -796,7 +977,7 @@ export async function deployPages(
 
   for (const f of assetFiles) {
     const manifestKey = '/' + f.path; // wrangler manifest key 以 / 开头
-    const hash = await computePageAssetHash(f.buffer, f.path);
+    const hash = await computeStaticAssetHash(f.buffer, f.path);
     manifest[manifestKey] = hash;
     // 同 hash 的文件只上传一次（内容寻址去重）
     if (!hashToFile.has(hash)) {

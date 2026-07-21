@@ -1,5 +1,48 @@
 # Changelog
 
+## [1.3.6] - 2026-07-21
+
+### 🚀 新特性
+
+- **账户编辑功能**：新增 `PUT /accounts/:id` 接口（backend + worker 双端对称），支持原地修改账户名称、凭证、切换认证方式（token ↔ global_key），无需删除重建。
+  - 部分更新语义：不填的凭证字段保留原值；`email` 与 `api_key` 为一组，需同时填写。
+  - 切换认证方式时自动校验新凭证并清空旧凭证字段。
+  - 前端复用现有"添加账号"对话框，编辑模式下隐藏功能复选框、凭证字段提示"不填则保留"。
+- **R2 可用性缓存**：账户表新增 `available_features` 列，创建/编辑/测试账户时自动探测 R2 是否可用并缓存结果。
+  - 前端存储管理页切换账户时直接读缓存，不再每次调 CF API 探测 R2。
+  - 后端 4 个 R2 列表路由短路优化：`available_features` 含 `-r2` 时直接返回"不可用"响应，不调 CF API。
+  - 存量账户部署后跑一次批量测试即可回填缓存，无需额外迁移脚本。
+- **R2 能力标识展示**：账户列表"功能"列显示 R2 支持状态（蓝色=支持/灰色删除线=不支持）；存储管理页和商店部署对话框的账户选择器中支持 R2 的账户名后标记绿色 R2 小标签。
+- **Worker with Assets 部署**：catalog 模板新增可选 `assets` 字段，双后端实现静态资源三阶段上传（manifest 校验、base64 分块、PUT 注入 JWT 与 ASSETS 绑定）；子域名设置面板新增完整访问地址展示（`https://<script>.<accountSubdomain>.workers.dev`）。
+- **多模块 ZIP 部署与 Cron 定时任务**：worker 端支持多模块 zip 部署，并支持 cron 定时任务注册。
+- **部署可观测性与兼容性增强**：新增 Workers traces / logs 部署开关（默认开启）；支持从模板读取并透传 `compatibility_date` 与 `compatibility_flags`；自动探测代码中的 Node.js 特性并注入 `nodejs_compat` 标志；兼容版本化 API（用 `version_id` 显式创建 deployment）；资产上传支持按 buckets 分批且跳过已存在资源；允许 Worker 产物为 zip 并自动解包。
+- **应用商店增强**：模板新增「仓库入口」按钮并优化源地址推断；模板说明支持 Markdown 渲染；账户摘要支持按功能/状态过滤。
+- **Workers / Pages 设置抽屉**：新增设置侧边抽屉，支持编辑绑定 / 环境变量 / 路由 / 自定义域名；新增 `StoreDeployDialog` 模板部署对话框。
+- **Catalog / Pages 部署服务（backend + worker 对称）**：catalog 部署与 Pages 部署（worker）下沉为独立服务，打通 store 部署全链路。
+
+### ♻️ 重构
+
+- **Catalog KV 缓存与 Schema 精简**：移除 `catalog.schema.json` 中不必要的 `value` 字段及相关校验逻辑；优化 `store.ts` 中 KV 缓存处理，增加缓存 TTL 防止脏数据。
+
+### 🐛 修复
+
+- **Worker with Assets 部署修复**：修复手动 / 批量部署路由未传入 `assets` 元数据导致静态资源被静默跳过。
+- **Store 详情抽屉与 R2 筛选修复**：修复 R2 账户筛选及详情抽屉布局问题。
+- **Store 空目录缓存修复**：忽略无模板的空目录缓存，避免脏数据。
+- **后端部署修复**：backend 新增 dotenv 支持，修复部署域名拼接错误。
+
+### 🔒 安全
+
+- **Catalog 部署 SSRF 防护**：store / catalog 部署链路补充 `ssrfGuard` 防护（backend + worker 对称），校验脚本与静态资源 URL 来源，收敛部署 SSRF 攻击面。
+
+### 🔧 部署 / CI
+
+- **GitHub Actions 部署工作流加固**：改用 GitHub Environments 管理密钥，新增 Secrets + Environments 部署方案；改用 CF REST API 替代 wrangler 操作 D1 和 KV；修复密钥泄露、资源匹配不稳健及子域名处理问题；修复 Pages 项目创建错误被静默吞掉（关联 issue #11 部署地址重复）。
+
+### 📝 文档
+
+- **合规使用声明与安全提示**：补充合规使用声明与安全提示文档。
+
 ## [1.3.5] - 2026-07-11
 
 ### 🚀 新特性

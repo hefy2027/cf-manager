@@ -26,6 +26,8 @@ export interface SourceConfig {
   assetName?: string;
   subPath?: string;
   size?: number;
+  // 多模块 Worker 入口文件名（如 index.js）。不填时按约定推断（worker.js → index.js → 根目录首个 JS）。
+  mainModule?: string;
 }
 
 export interface CatalogBinding {
@@ -51,11 +53,19 @@ export interface CatalogTemplate {
   homepage?: string;
   readmeUrl?: string;
   type: 'worker' | 'pages' | 'hybrid';
+  compatibility_date?: string;
+  compatibility_flags?: string[];
   source?: SourceConfig;
   sources?: { worker?: SourceConfig; pages?: SourceConfig };
   bindings?: CatalogBinding[];
   env?: Record<string, string>;
   routes?: string[];
+  crons?: string[];
+  assets?: {
+    source: SourceConfig;
+    binding?: string;
+    config?: { html_handling?: string; not_found_handling?: string };
+  };
 }
 
 export interface Catalog {

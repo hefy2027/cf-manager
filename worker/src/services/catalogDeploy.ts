@@ -2,6 +2,7 @@ import type { Account } from '../db/models';
 import { cfFetch, cfFetchRaw, cfFetchAll } from './cfApi';
 import type { CatalogTemplate, CatalogBinding } from './catalogValidator';
 import { deployPages, extractZipFiles, validatePagesProjectName, ensurePagesProject } from './pagesDeploy';
+import { deployWorker } from './assetsDeploy';
 import { addAuditLog } from '../db/models';
 
 export interface DeployOptions {
@@ -13,6 +14,8 @@ export interface DeployOptions {
   secretValues: Record<string, string>;  // for var/prompt bindings
   db?: D1Database;           // for audit log
   deployType?: 'worker' | 'pages' | 'both';
+  traces?: boolean;          // Workers 跟踪（默认开启）
+  logs?: boolean;            // Workers 日志（默认开启）
 }
 
 interface ResolvedBinding {
@@ -50,10 +53,10 @@ async function downloadArtifact(url: string, type: 'worker' | 'pages'): Promise<
 
   // Content type validation
   if (type === 'worker') {
-    // Should be text/JS, not binary
+    // 允许 zip：多模块 Worker 产物是压缩包，由 deployWorker 本地解包上传（与 backend 对称）
     const firstBytes = buffer.slice(0, 4);
     const isZip = firstBytes[0] === 0x50 && firstBytes[1] === 0x4b; // PK
-    if (isZip) throw new Error('Worker 产物应是 JS 文本，但下载内容是 zip');
+    if (isZip) console.log(`[Store] Worker 产物为 zip，将按多模块方式解包上传`);
   } else {
     // Pages should be zip
     const firstBytes = buffer.slice(0, 4);
@@ -212,7 +215,7 @@ async function getWorkerSubdomain(account: Account, encryptionKey: string): Prom
 }
 
 export async function deployTemplate(opts: DeployOptions): Promise<DeployResult> {
-  const { account, encryptionKey, template, name, bindingSelections, secretValues, deployType } = opts;
+  const { account, encryptionKey, template, name, bindingSelections, secretValues, deployType, traces, logs } = opts;
   if (!validatePagesProjectName(name)) {
     return { success: false, error: '项目名只能包含小写字母、数字和连字符，且以字母或数字开头', warnings: [], bindings: [] };
   }
@@ -246,42 +249,33 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
       const src = template.type === 'hybrid' ? template.sources?.worker : template.source;
       if (!src) throw new Error('No worker source configured');
       const { content } = await downloadArtifact(src.url, 'worker');
-
-      const metadata: Record<string, unknown> = {
-        main_module: 'worker.js',
-        compatibility_date: '2024-01-01',
+      const isZip = content[0] === 0x50 && content[1] === 0x4b;
+      await deployWorker(account, encryptionKey, name, isZip ? new Uint8Array(0) : content, {
+        ...(isZip ? { packageZip: content } : {}),
+        ...(src?.mainModule ? { mainModule: src.mainModule } : {}),
         bindings: resolvedBindings.map(b => b.cfBinding),
-      };
-      if (template.env) {
-        metadata.bindings = [
-          ...resolvedBindings.map(b => b.cfBinding),
-          ...Object.entries(template.env).map(([k, v]) => ({ type: 'plain_text', name: k, text: v })),
-        ];
-      }
-      const form = new FormData();
-      form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-      form.append('worker.js', new Blob([content], { type: 'application/javascript+module' }), 'worker.js');
-
-      const workerResp = await cfFetchRaw(account, `/accounts/${account.account_id}/workers/scripts/${name}`, encryptionKey, {
-        method: 'PUT', body: form,
+        env: template.env,
+        ...(template.compatibility_date ? { compatibilityDate: template.compatibility_date } : {}),
+        ...(template.compatibility_flags?.length ? { compatibilityFlags: template.compatibility_flags } : {}),
+        assets: template.assets,
+        traces: traces !== false,
+        logs: logs !== false,
       });
-      if (!workerResp.ok) {
-        const errBody = await workerResp.text();
-        throw new Error(`Worker 部署失败 (${workerResp.status}): ${errBody}`);
-      }
-
-      // Enable workers.dev subdomain so the Worker is accessible immediately (matches backend deployWorker behavior)
-      try {
-        await cfFetch(account, `/accounts/${account.account_id}/workers/scripts/${name}/subdomain`, encryptionKey, {
-          method: 'POST', body: JSON.stringify({ enabled: true, previews_enabled: true }),
-        });
-      } catch (_) {
-        // Soft fail: user can still enable manually from settings drawer
-      }
-
       const sub = await getWorkerSubdomain(account, encryptionKey);
       urls.push(sub ? `https://${name}.${sub}.workers.dev` : `https://${name}.workers.dev`);
       workerDeployed = true;
+
+      // 注册 Cron Triggers（仅 Worker 脚本支持）
+      if (template.crons && template.crons.length > 0) {
+        try {
+          await cfFetch(account, `/accounts/${account.account_id}/workers/scripts/${name}/schedules`, encryptionKey, {
+            method: 'PUT', body: JSON.stringify(template.crons.map((cron: string) => ({ cron }))),
+          });
+          console.log(`[Store] Cron triggers set for ${name}: ${template.crons.join(', ')}`);
+        } catch (e: any) {
+          warnings.push(`定时任务注册失败: ${e.message}`);
+        }
+      }
     }
 
     // Step 4: Deploy pages
@@ -399,17 +393,27 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
     return { success: true, warnings, bindings: resolvedBindings, url };
 
   } catch (e: any) {
+    // 展开 error.cause 链，避免 undici/cfFetch 抛的裸 "fetch failed" 吞掉真实原因
+    let cur: any = e; const chain: string[] = []; const seen = new Set<any>();
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const seg = [cur.code, cur.message].filter(Boolean).join(' ');
+      if (seg && !chain.includes(seg)) chain.push(seg);
+      cur = cur.cause;
+    }
+    const detail = chain.join(' <- ') || String(e);
+    console.error(`[Store] Deploy failed for ${name} (${template.id}): ${detail}`);
     // Hard failure — rollback only the parts that were NOT successfully deployed
     // (hybrid: if only Pages failed, the already-deployed Worker must be preserved)
     const rollbackErrors = await rollback(account, encryptionKey, resolvedBindings, name, !workerDeployed);
     if (opts.db) {
       await addAuditLog(opts.db, {
         account_id: account.id, action: 'store_deploy', target: name,
-        detail: `error: ${e.message}`, status: 'error',
+        detail: `error: ${detail}`, status: 'error',
       });
     }
     return {
-      success: false, error: e.message, warnings, bindings: resolvedBindings,
+      success: false, error: detail, warnings, bindings: resolvedBindings,
       rolledBack: true, rollbackErrors: rollbackErrors.length > 0 ? rollbackErrors : undefined,
     };
   }

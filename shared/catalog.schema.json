@@ -33,7 +33,8 @@
         "url": { "type": "string", "format": "uri", "pattern": "^https://", "description": "部署源码拉取地址。部署时从此处拉取代码；当 homepage 未填时，兜底作为仓库入口" },
         "assetName": { "type": "string" },
         "subPath": { "type": "string" },
-        "size": { "type": "number" }
+        "size": { "type": "number" },
+        "mainModule": { "type": "string", "description": "多模块 Worker 入口文件名（如 index.js）。缺省时按约定推断：worker.js → index.js/index.mjs → 根目录首个 JS 模块；有 wrangler.toml/jsonc 时以其中的 main 字段为准。" }
       }
     },
     "binding": {
@@ -88,6 +89,12 @@
         "homepage": { "type": "string", "format": "uri", "description": "项目主页/仓库地址。前端用于「访问仓库」按钮及详情页「前往源仓库」链接" },
         "readmeUrl": { "type": "string", "format": "uri", "description": "README 原始内容地址（如 raw.githubusercontent.com），详情页加载 README 时使用" },
         "type": { "enum": ["worker", "pages", "hybrid"] },
+        "compatibility_date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "Worker 兼容性日期。缺省时部署端使用较新的安全默认值（'2024-11-01'）。React Router v7 / 含 node 构建产物的 worker 通常需要更新的日期。" },
+        "compatibility_flags": {
+          "type": "array",
+          "description": "Worker 兼容性标志，如 [\"nodejs_compat\"]。含 CJS 互操作（require/__commonJS）或访问 process/Buffer 等 node 内置的 worker 必须开启 nodejs_compat，否则运行时抛异常（Error 1101）。",
+          "items": { "type": "string" }
+        },
         "source": { "$ref": "#/$defs/source", "description": "部署源码（非 hybrid 类型使用）。当 homepage 未填时，source.url 兜底作为仓库入口" },
         "sources": {
           "type": "object",
@@ -104,7 +111,28 @@
           "items": { "$ref": "#/$defs/binding" }
         },
         "env": { "type": "object" },
-        "routes": { "type": "array", "items": { "type": "string" } }
+        "routes": { "type": "array", "items": { "type": "string" } },
+        "crons": {
+          "type": "array",
+          "description": "Worker 定时任务（Cron Triggers）。每个元素是标准 cron 表达式（如 \"*/5 * * * *\"），部署后自动注册到该 Worker 脚本。仅对 worker/hybrid(worker 部分) 生效；pages 类型不适用（Cron 绑定在 Worker 脚本而非 Pages 项目）。",
+          "items": { "type": "string", "pattern": "^\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+$" }
+        },
+        "assets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source"],
+          "properties": {
+            "source": { "$ref": "#/$defs/source" },
+            "binding": { "type": "string", "description": "资产绑定变量名，默认 ASSETS" },
+            "config": {
+              "type": "object",
+              "properties": {
+                "html_handling": { "type": "string" },
+                "not_found_handling": { "type": "string" }
+              }
+            }
+          }
+        }
       },
       "allOf": [
         {
@@ -170,6 +198,18 @@
                   }
                 }
               }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "pages" } },
+            "required": ["type"]
+          },
+          "then": {
+            "not": { "required": ["crons"] },
+            "errorMessage": {
+              "not": "pages 类型不支持 crons（定时任务是 Worker 脚本特性）"
             }
           }
         },

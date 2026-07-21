@@ -4,7 +4,7 @@ import { proxyFetch } from './proxyService';
 import { createAuditLog } from '../models/auditLog';
 import type { CatalogTemplate, CatalogBinding } from './catalogValidator';
 import { appLogger } from './logger';
-import { deployWorker, deployPages, extractZipFiles, validatePagesProjectName, ensurePagesProject } from './workerService';
+import { deployWorker, deployPages, extractZipFiles, validatePagesProjectName, ensurePagesProject, updateSchedules } from './workerService';
 
 export interface DeployOptions {
   account: Account;
@@ -13,6 +13,8 @@ export interface DeployOptions {
   bindingSelections: Record<string, { mode: 'auto' | 'existing'; existingId?: string; runInitSql?: boolean }>;
   secretValues: Record<string, string>;
   deployType?: 'worker' | 'pages' | 'both';
+  traces?: boolean;          // Workers 跟踪（默认开启）
+  logs?: boolean;            // Workers 日志（默认开启）
 }
 
 interface ResolvedBinding {
@@ -44,7 +46,9 @@ async function downloadArtifact(url: string, type: 'worker' | 'pages'): Promise<
   if (buffer.length > MAX_DOWNLOAD) throw new Error('产物超过 50MB 限制');
 
   if (type === 'worker') {
-    if (buffer[0] === 0x50 && buffer[1] === 0x4b) throw new Error('Worker 产物应是 JS 文本，但下载内容是 zip');
+    // 允许 zip：多模块 Worker 产物是压缩包，由 deployWorker 本地解包上传
+    const isZip = buffer[0] === 0x50 && buffer[1] === 0x4b;
+    if (isZip) appLogger.warn(`[Store] Worker 产物为 zip，将按多模块方式解包上传`);
   } else {
     if (!(buffer[0] === 0x50 && buffer[1] === 0x4b)) throw new Error('Pages 产物应是 zip，但下载内容不是 zip');
   }
@@ -282,7 +286,7 @@ async function deployPagesArtifact(
 // --- Main deploy ---
 
 export async function deployTemplate(opts: DeployOptions): Promise<DeployResult> {
-  const { account, template, name, bindingSelections, secretValues, deployType } = opts;
+  const { account, template, name, bindingSelections, secretValues, deployType, traces, logs } = opts;
   if (!validatePagesProjectName(name)) {
     return { success: false, error: '项目名只能包含小写字母、数字和连字符，且以字母或数字开头', warnings: [], bindings: [] };
   }
@@ -319,15 +323,40 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
       const src = template.type === 'hybrid' ? template.sources?.worker : template.source;
       if (!src) throw new Error('No worker source configured');
       const content = await downloadArtifact(src.url, 'worker');
-      const { subdomain: accountSubdomain } = await deployWorker(account, name, content, {
+      const isZip = content[0] === 0x50 && content[1] === 0x4b;
+      const { subdomain: accountSubdomain } = await deployWorker(account, name, isZip ? '' : content, {
+        ...(isZip ? { packageZip: content } : {}),
+        ...(src?.mainModule ? { mainModule: src.mainModule } : {}),
         bindings: resolvedBindings.map(b => b.cfBinding),
         env: template.env,
+        ...(template.compatibility_date ? { compatibilityDate: template.compatibility_date } : {}),
+        ...(template.compatibility_flags?.length ? { compatibilityFlags: template.compatibility_flags } : {}),
+        traces: traces !== false,
+        logs: logs !== false,
         createDeployment: true,
         deploymentAnnotation: { 'cf-manager/store': template.id },
+        assets: template.assets as any,
       });
       urls.push(accountSubdomain ? `https://${name}.${accountSubdomain}.workers.dev` : `https://${name}.workers.dev`);
       appLogger.info(`[Store] Worker deployed: ${name}`);
       workerDeployed = true;
+
+      // Step 3.5: 注册 Cron Triggers（仅 Worker 脚本支持）
+      if (template.crons && template.crons.length > 0) {
+        try {
+          const res = await updateSchedules(account, name, template.crons);
+          // cloudflare SDK 的 schedules.update 成功时返回的是 result 对象 { schedules: [...] }（不带 success 字段）；
+          // rest 风格则带 success。两者都视为成功，避免把已成功的响应误报为失败。
+          const ok = res?.success === true || Array.isArray(res?.schedules) || Array.isArray(res?.result?.schedules);
+          if (!ok) {
+            warnings.push(`定时任务注册失败: ${JSON.stringify(res?.errors || res)}`);
+          } else {
+            appLogger.info(`[Store] Cron triggers set for ${name}: ${template.crons.join(', ')}`);
+          }
+        } catch (e: any) {
+          warnings.push(`定时任务注册失败: ${e.message}`);
+        }
+      }
     }
 
     // Step 4: Deploy pages
@@ -362,12 +391,22 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
     return { success: true, warnings, bindings: resolvedBindings, url };
 
   } catch (e: any) {
-    appLogger.error(`[Store] Deploy failed for ${name} (${template.id}): ${e.message}`);
+    // 展开 error.cause 链，避免 undici/sdk 抛的裸 "fetch failed" 吞掉真实原因
+    let cur: any = e; const chain: string[] = []; const seen = new Set<any>();
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const seg = [cur.code, cur.message].filter(Boolean).join(' ');
+      if (seg && !chain.includes(seg)) chain.push(seg);
+      cur = cur.cause;
+    }
+    const detail = chain.join(' <- ') || String(e);
+    appLogger.error(`[Store] Deploy failed for ${name} (${template.id}): ${detail}`);
+    appLogger.error((e && e.stack) ? e.stack : String(e));
     // 仅回滚本轮未成功部署的部分：已部署的 Worker/Pages 不删，避免 hybrid 一处失败连坐删除成功部分
     const rollbackErrors = await rollback(account, resolvedBindings, name, !workerDeployed);
-    createAuditLog(account.id!, 'store_deploy', name, `error: ${e.message}`, 'error');
+    createAuditLog(account.id!, 'store_deploy', name, `error: ${detail}`, 'error');
     return {
-      success: false, error: e.message, warnings, bindings: resolvedBindings,
+      success: false, error: detail, warnings, bindings: resolvedBindings,
       rolledBack: true, rollbackErrors: rollbackErrors.length > 0 ? rollbackErrors : undefined,
     };
   }

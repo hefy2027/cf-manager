@@ -4,7 +4,12 @@
       <n-form v-if="template" label-placement="top" size="small">
         <!-- Account -->
         <n-form-item label="目标账户" required>
-          <n-select v-model:value="form.accountId" :options="accountOptions" filterable placeholder="选择账户" @update:value="onAccountChange" />
+          <n-select v-model:value="form.accountId" :options="accountOptions" :render-label="renderAccountLabel" filterable placeholder="选择账户" @update:value="onAccountChange" />
+          <template v-if="needsR2" #feedback>
+            <n-text type="warning" depth="3" style="font-size: 12px">
+              该模板需要 R2，仅显示已开通 R2 的账户
+            </n-text>
+          </template>
         </n-form-item>
 
         <!-- Name -->
@@ -20,6 +25,32 @@
             <n-radio-button value="pages">仅 Pages</n-radio-button>
           </n-radio-group>
         </n-form-item>
+
+        <!-- Observability -->
+        <n-form-item label="可观测性">
+          <n-space align="center" :size="24">
+            <n-space align="center" :size="8">
+              <n-switch v-model:value="enableLogs" size="small" />
+              <n-tooltip>
+                <template #trigger>
+                  <span style="font-size: 13px; cursor: help">Workers 日志</span>
+                </template>
+                开启后可在 Workers Logs 查看 console.log 与调用日志
+              </n-tooltip>
+            </n-space>
+            <n-space align="center" :size="8">
+              <n-switch v-model:value="enableTraces" size="small" />
+              <n-tooltip>
+                <template #trigger>
+                  <span style="font-size: 13px; cursor: help">Workers 跟踪</span>
+                </template>
+                开启链路追踪与指标（Workers Observability）
+              </n-tooltip>
+            </n-space>
+          </n-space>
+        </n-form-item>
+
+
 
         <!-- Bindings -->
         <template v-if="template.bindings?.length">
@@ -70,6 +101,14 @@
             <n-descriptions-item v-for="(v, k) in template.env" :key="k" :label="k">{{ v }}</n-descriptions-item>
           </n-descriptions>
         </template>
+
+        <!-- Crons (read-only) -->
+        <template v-if="template.crons && template.crons.length">
+          <n-divider>定时任务 (自动注册)</n-divider>
+          <n-space>
+            <n-tag v-for="cron in template.crons" :key="cron" type="warning" :bordered="false" round>{{ cron }}</n-tag>
+          </n-space>
+        </template>
       </n-form>
     </n-spin>
 
@@ -83,10 +122,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, h } from 'vue';
 import { storeApi } from '../api/store';
 import { workersApi } from '../api/workers';
 import { accountsApi } from '../api/accounts';
+import { NTag } from 'naive-ui';
 
 const props = defineProps<{ show: boolean; template: any }>();
 const emit = defineEmits<{ 'update:show': [boolean]; deployed: [any] }>();
@@ -98,6 +138,8 @@ const visible = computed({
 
 const deploying = ref(false);
 const deployType = ref<'worker' | 'pages' | 'both'>('both');
+const enableLogs = ref(true);    // Workers 日志（默认开启）
+const enableTraces = ref(true);  // Workers 跟踪（默认开启）
 const accounts = ref<any[]>([]);
 const form = ref({ accountId: null as number | null, name: '' });
 const bindingSelections = ref<Record<string, { value: string; mode: 'auto' | 'existing'; existingId?: string; runInitSql: boolean }>>({});
@@ -105,9 +147,36 @@ const secretValues = ref<Record<string, string>>({});
 const resourceLoading = ref<Record<string, boolean>>({});
 const existingResources = ref<Record<string, any[]>>({ kv: [], d1: [], r2: [] });
 
-const accountOptions = computed(() =>
-  accounts.value.map(a => ({ label: a.name, value: a.id }))
+// 模板是否需要 R2：存在 type 为 r2 的绑定
+const needsR2 = computed(() =>
+  (props.template?.bindings || []).some((b: any) => b.type === 'r2')
 );
+
+// 精确判断账户是否开通 R2：避免 '-r2' 被 includes('r2') 误匹配
+function hasR2Feature(account: any): boolean {
+  const features = (account.available_features || '').split(',').filter(Boolean);
+  return features.includes('r2') && !features.includes('-r2');
+}
+
+const accountOptions = computed(() => {
+  const list = accounts.value
+    // 需要 R2 时只保留已开通 R2 的账户，其余不可选
+    .filter((a) => !needsR2.value || hasR2Feature(a))
+    .map((a) => ({ label: a.name, value: a.id }));
+  return list;
+});
+
+function renderAccountLabel(option: { label: string; value: number }) {
+  const account = accounts.value.find((a: any) => a.id === option.value);
+  if (!account) return option.label;
+  if (hasR2Feature(account)) {
+    return h('span', { style: 'display: inline-flex; align-items: center; gap: 4px' }, [
+      option.label,
+      h(NTag, { size: 'tiny', type: 'success', bordered: false }, { default: () => 'R2' }),
+    ]);
+  }
+  return option.label;
+}
 
 const resourceBindings = computed(() =>
   (props.template?.bindings || []).filter((b: any) => ['kv', 'd1', 'r2'].includes(b.type))
@@ -200,6 +269,8 @@ async function handleDeploy() {
       bindingSelections: selections,
       secretValues: secretValues.value,
       deployType: props.template.type === 'hybrid' ? deployType.value : undefined,
+      logs: enableLogs.value,
+      traces: enableTraces.value,
     });
 
     emit('deployed', result);
@@ -224,6 +295,8 @@ watch(() => props.template, (tmpl) => {
     secretValues.value = {};
     bindingSelections.value = {};
     existingResources.value = { kv: [], d1: [], r2: [] };
+    enableLogs.value = true;
+    enableTraces.value = true;
     for (const b of (tmpl.bindings || [])) {
       if (['kv', 'd1', 'r2'].includes(b.type)) {
         bindingSelections.value[b.name] = { value: '__auto__', mode: 'auto', runInitSql: b.type === 'd1' };
