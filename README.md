@@ -1,24 +1,38 @@
 # CF Manager
 
-一站式 Cloudflare 多账户管理平台。提供可视化界面统一管理 Workers、Pages、DNS、KV、D1、R2、AI 推理、浏览器渲染等服务，同时暴露 OpenAI 兼容 API 供外部项目调用。
+> ## ⚠️ 免责声明与合规提示
+>
+> 本工具仅供**学习、技术研究与已授权账户的自有运维管理**使用。使用本项目产生的任何账号封禁、IP 封禁、费用或其他后果，均由使用者自行承担，与本开源项目及作者无关。
+>
+> - 请严格遵守 [Cloudflare 服务条款（含 Acceptable Use）](https://www.cloudflare.com/terms/)，**禁止**将本项目用于对外提供公共 AI / 渲染中转服务、转售或分摊算力等违反条款的行为。
+> - 仅添加你本人或已明确授权的 Cloudflare 账户，不使用任何未授权账户。
+> - 多账户切换、自动配额切换等能力**仅限本人合法授权的多个自有账户**使用；批量挂载账号以自动分摊 AI 配额可能违反 Cloudflare 服务协议，不建议开启。
+> - 控制调用频率，避免批量、自动化过量请求触发风控或封号。
+> - 浏览器渲染等涉及外部 URL 的功能，请仅用于可信来源，防范 SSRF 与内网探测。
+> - 如对相关功能是否符合 Cloudflare 服务条款存疑，请优先参考官方条款并咨询法律意见。
+
+CF Manager 是面向开发者 / 运维的一站式 Cloudflare 多账户统一运维管理平台，解决多账号频繁切换后台、资源批量运维繁琐的问题。
+
+支持可视化管理域名 DNS、Workers、Pages 与 KV/D1/R2 存储，附带内置 AI 推理、网页渲染的本地调试能力，并提供**仅限内网本地使用**的 OpenAI 兼容适配接口。
 
 ## 在线演示
 
-| |                                                                  |
-|---|------------------------------------------------------------------|
+| | |
+|---|---|
 | 地址 | [https://mgrcf.pages.dev/admin/](https://mgrcf.pages.dev/admin/) |
-| 密码 | `cfmgrbest`                                                      |
+| 密码 | `cfmgrbest` |
 
 > 演示站部署在 Cloudflare Pages + D1，无需 Docker。根路径显示伪装的 nginx 欢迎页，管理界面通过 `/admin/` 访问。
-
----
+>
+> ⚠️ 演示站绑定的是**专用演示账户**，所有功能均可体验但配额有限，仅供界面与功能演示，**请勿用于真实业务或批量调用**；该账户为公开共享演示账号，滥用可能导致其被 Cloudflare 限流或封禁。
 
 ## 功能特性
 
 ### 多账户管理
-- 支持 API Token 和 Global API Key 两种认证方式，详见 [账户认证文档](docs/account-auth.md)
-- 多账户统一管理，自动加密存储凭证
-- 支持在多个合法授权账户间手动切换；AI 推理与浏览器渲染可按配额策略选择账户，使用行为须符合 Cloudflare 服务条款
+- 支持最小权限 **API Token（推荐）** 与高权限 **Global API Key** 两种认证方式，详见 [账户认证文档](docs/account-auth.md)
+- Global API Key 权限覆盖全账号所有域名与资源，泄露将导致全部资产面临风险，**日常运维强烈建议使用细粒度 API Token**
+- 多账户统一管理，凭证自动加密存储（AES）
+- 支持在多个**本人合法授权的自有账户**间手动切换，区分测试 / 业务环境；自动配额切换仅为技术调度逻辑，启用后可能违反 Cloudflare 服务协议，不建议生产环境开启
 - 出于安全原因，不再提供 cf-reg 批量注册功能
 
 ### 仪表盘
@@ -27,7 +41,7 @@
 
 ### Workers / Pages 管理
 - 查看、部署、删除 Workers 脚本和 Pages 项目
-- 支持单个部署和跨账户批量部署（Workers + Pages）
+- 支持单个部署和跨账户批量部署（Workers + Pages）；批量跨账号高频同步部署易触发平台异常操作检测，请降低操作频率
 - 管理脚本绑定、环境变量、路由、自定义域名
 - Pages 部署历史查看和回滚
 
@@ -44,10 +58,10 @@
 ### AI 推理
 - 支持所有 Cloudflare Workers AI 模型
 - **Prompt Caching 感知计费**：自动识别 GLM-5.2 / Kimi K2.5 / K2.6 / K2.7-code 的缓存命中 token，按 CF 折扣价精准估算神经元用量
-- **缓存感知路由**：缓存模型优先复用最近使用的账户，最大化缓存命中率，大幅降低神经元消耗
+- **单账号请求缓存优化**：在同一账户内对重复推理请求做缓存复用，降低单账号自身神经元消耗，请勿用于跨账号分摊配额
 - 流式对话界面，Reasoning 模型思考过程实时展示
 - 历史对话上下文支持
-- 多账户间按策略切换，配额耗尽时自动切换账户（须确保各账户均合法授权并符合 Cloudflare 服务条款）
+- 多账户调度：支持手动切换已授权账号区分测试 / 业务环境；自动配额切换仅为纯技术演示逻辑，启用后可能违反 Cloudflare 服务协议，不建议生产环境开启
 
 ### 浏览器渲染
 - 支持 5 种渲染模式：截图、HTML 内容、Markdown 转换、PDF 生成、链接提取
@@ -55,16 +69,20 @@
 - 渲染时长实时统计
 - 仅允许 `http/https` 协议，并对内网 / 保留 IP 做拦截以缓解 SSRF 风险；使用前请自行评估目标 URL 安全性
 
-### OpenAI 兼容 API
-- 暴露 `/v1/chat/completions` 和 `/v1/models` 接口
-- 完全兼容 OpenAI SDK，可直接对接 Cursor、ChatGPT-Next-Web、Open WebUI 等工具
+### OpenAI 兼容 API（仅限内网本地调试）
+本地内置 `/v1/chat/completions`、`/v1/models` 以及浏览器渲染接口，仅推荐**局域网本地开发调试**使用：
+
+- ⚠️ 禁止将该接口直接公网暴露、对外提供给第三方商用；
+- 公网开放多账户自动调度接口会违反 Cloudflare 服务条款，存在账号封禁风险；
+- 仅用于自有项目本地对接调试，不支持对外分发算力服务。
+- 接口完全兼容 OpenAI SDK，方便本地对接 Cursor、ChatGPT-Next-Web、Open WebUI 等自研测试工具
 - 支持流式和非流式响应，自动注入 `stream_options.include_usage` 确保用量可追踪
 - Prompt Caching 自动检测与折扣计费
 - 浏览器渲染 API (`/v1/browser/render`)
 - 详见 [API 文档](docs/api-v1.md)
 
 ### 系统设置
-- 代理配置：支持 HTTP/HTTPS 和 SOCKS5 协议，所有 Cloudflare API 请求均走代理
+- 代理配置：支持 HTTP/HTTPS 和 SOCKS5 协议，所有 Cloudflare API 请求均走代理；⚠️ 代理会改变请求出口 IP，频繁跨地域切换 IP 极易触发 Cloudflare 风控限流与账号封禁，请谨慎使用
 - 缓存管理：一键清除 SDK 客户端和区域缓存
 - 定时任务框架（可扩展）
 
@@ -73,23 +91,6 @@
 - 可选的 API Secret 认证保护管理界面
 - 管理界面隐藏在 `/admin/` 路径，根路径伪装为 nginx 默认页
 - 操作审计日志
-
----
-
-## ⚠️ 免责声明
-
-本工具仅供学习和技术研究使用。使用本项目导致的任何账号封禁、IP 封禁或其他后果与本项目无关。
-
-请务必严格遵守 Cloudflare 官方服务条款和使用协议，合理控制和限制调用量，避免过度请求或滥用 Cloudflare API。
-
-> 本工具所有功能仅限用户**已合法授权的账户**使用。多账户切换能力需用户自行确保符合 Cloudflare 服务条款。
-
-#### 合规使用建议
-
-- 仅添加你本人或获得明确授权管理的 Cloudflare 账户，不使用任何未授权账户。
-- 控制调用频率，避免批量、自动化过量请求触发风控或封号。
-- 浏览器渲染等涉及外部 URL 的功能，请仅用于可信来源，防范 SSRF 与内网探测。
-- 如对某项功能是否符合 Cloudflare 服务条款存疑，请优先参考 [Cloudflare 服务条款（含 Acceptable Use 章节）](https://www.cloudflare.com/terms/) 并咨询法律意见。
 
 ---
 
@@ -106,12 +107,14 @@
 
 1. **Fork 本仓库** → 点击右上角 Fork
 2. 进入 Fork 仓库 → **Settings** → **Environments** → **New environment**，创建环境（如 `production`），在环境内添加 4 个 secret：
-   - `CF_API_KEY`：Cloudflare Global API Key
+   - `CF_API_KEY`：Cloudflare Global API Key（高权限密钥，建议改用细粒度 API Token，见 [账户认证文档](docs/account-auth.md)）
    - `CF_EMAIL`：Cloudflare 账号邮箱
-   - `ENCRYPTION_KEY`：加密密钥（可填 `cfmgrbest`）
-   - `API_SECRET`：访问密码（可填 `cfmgrbest`）
+   - `ENCRYPTION_KEY`：加密密钥（请填写高强度随机字符串，至少 16 位）
+   - `API_SECRET`：管理界面访问密码（请填写高强度随机字符串，不要使用弱密码）
 3. 进入 **Actions** → 选择 **Deploy to Cloudflare Pages (Secrets)** → **Run workflow**，输入环境名如 `production`
 4. 等待部署完成，访问 `https://cfmgr.pages.dev/admin/`
+
+> ⚠️ 重要提醒：仅建议绑定本人独立业务 / 测试账号分开管理，请勿批量挂载账号用于自动分摊 AI 配额，该用法违反 Cloudflare 服务协议。
 
 > 多账户可建多个 Environment 分别配密钥，部署时输入对应环境名即可。
 

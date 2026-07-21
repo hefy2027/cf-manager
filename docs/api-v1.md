@@ -1,6 +1,8 @@
 # External API 文档 (`/v1`)
 
-CF Manager 暴露 `/v1` 系列接口，兼容 OpenAI API 格式，可直接用于 Cursor、ChatGPT-Next-Web、Open WebUI 等工具。
+CF Manager 暴露 `/v1` 系列接口，兼容 OpenAI API 格式，方便本地对接 Cursor、ChatGPT-Next-Web、Open WebUI 等自研测试工具。
+
+> ⚠️ 该接口仅推荐**局域网本地开发调试**使用：禁止直接公网暴露、对外提供给第三方商用；公网开放多账户自动调度接口会违反 Cloudflare 服务条款，存在账号封禁风险；仅用于自有项目本地对接调试，不支持对外分发算力服务。
 
 ## 认证
 
@@ -60,7 +62,7 @@ GET /v1/models
 POST /v1/chat/completions
 ```
 
-兼容 OpenAI Chat Completions API，支持流式和非流式模式。系统自动选择配额最充裕的账户，支持 Prompt Caching 的模型（GLM-5.2 / Kimi K2.5 / K2.6 / K2.7-code）会优先复用最近使用的账户以最大化缓存命中率。
+兼容 OpenAI Chat Completions API，支持流式和非流式模式。默认在单账户内对请求做缓存复用（Prompt Caching 模型 GLM-5.2 / Kimi K2.5 / K2.6 / K2.7-code 优先复用同一账户的缓存），以降低单账号自身神经元消耗；自动账户切换仅为技术调度逻辑，请勿用于跨账号分摊配额。
 
 **请求体：**
 
