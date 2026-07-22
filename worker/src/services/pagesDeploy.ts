@@ -105,6 +105,7 @@ export async function deployPages(
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${jwt}`,
+      'User-Agent': 'wrangler/4.112.0',
     },
     body: JSON.stringify({ hashes: allHashes }),
   });
@@ -141,6 +142,7 @@ export async function deployPages(
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${jwt}`,
+          'User-Agent': 'wrangler/4.112.0',
         },
         body: JSON.stringify(payload),
       });
@@ -157,6 +159,7 @@ export async function deployPages(
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${jwt}`,
+          'User-Agent': 'wrangler/4.112.0',
         },
         body: JSON.stringify({ hashes: allHashes }),
       });

@@ -13,7 +13,17 @@ export const storeApi = {
   refresh: () => apiClient.post('/store/refresh'),
   init: () => apiClient.get('/store/init', { _silent: true }),
 
-  // Deploy
+  // Preflight (两阶段部署: 预检)
+  preflight: (data: {
+    accountId: number;
+    templateId: string;
+    name: string;
+    bindingSelections?: Record<string, any>;
+    secretValues?: Record<string, string>;
+    deployType?: 'worker' | 'pages' | 'both';
+  }) => apiClient.post('/store/preflight', data, { timeout: 30000 }),
+
+  // Deploy (两阶段部署: 确认执行)
   deploy: (data: {
     accountId: number;
     templateId: string;

@@ -4,7 +4,7 @@ import {
   createCatalogSource, updateCatalogSource, deleteCatalogSource, ensureDefaultCatalogSource,
 } from '../models/catalogSource';
 import { validateCatalog, Catalog, CatalogTemplate } from '../services/catalogValidator';
-import { deployTemplate } from '../services/catalogDeploy';
+import { deployTemplate, preflightDeploy } from '../services/catalogDeploy';
 import { getAccountById } from '../models/account';
 import { appLogger } from '../services/logger';
 import { assertUrlSafe } from '../services/ssrfGuard';
@@ -260,7 +260,46 @@ router.get('/init', (_req: Request, res: Response) => {
   res.json({ success: true });
 });
 
-// ============ Deploy ============
+// ============ Shared helper: find template from enabled sources ============
+
+async function findTemplate(templateId: string): Promise<CatalogTemplate | null> {
+  const sources = getEnabledCatalogSources();
+  for (const source of sources) {
+    const catalog = await fetchSourceCatalog(source);
+    if (catalog?.templates) {
+      const found = catalog.templates.find(t => t.id === templateId) || null;
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// ============ Preflight (两阶段部署: 预检) ============
+
+router.post('/preflight', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { accountId, templateId, name, bindingSelections, secretValues, deployType } = req.body;
+    if (!accountId || !templateId || !name) {
+      res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'accountId, templateId, name are required' } });
+      return;
+    }
+    const account = getAccountById(parseInt(accountId, 10));
+    if (!account) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Account not found' } }); return; }
+
+    const template = await findTemplate(templateId);
+    if (!template) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Template not found' } }); return; }
+
+    const result = await preflightDeploy({
+      account, template, name,
+      bindingSelections: bindingSelections || {},
+      secretValues: secretValues || {},
+      deployType: deployType || undefined,
+    });
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+// ============ Deploy (两阶段部署: 确认执行) ============
 
 router.post('/deploy', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -272,15 +311,7 @@ router.post('/deploy', async (req: Request, res: Response, next: NextFunction) =
     const account = getAccountById(parseInt(accountId, 10));
     if (!account) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Account not found' } }); return; }
 
-    const sources = getEnabledCatalogSources();
-    let template: CatalogTemplate | null = null;
-    for (const source of sources) {
-      const catalog = await fetchSourceCatalog(source);
-      if (catalog?.templates) {
-        template = catalog.templates.find(t => t.id === templateId) || null;
-        if (template) break;
-      }
-    }
+    const template = await findTemplate(templateId);
     if (!template) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Template not found' } }); return; }
 
     const result = await deployTemplate({

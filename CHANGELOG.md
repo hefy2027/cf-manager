@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.3.7] - 2026-07-22
+
+### 🚀 新特性
+
+- **Deploy Service 独立模块化**：将 Catalog 部署逻辑从 `catalogDeploy.ts` 重构为独立的 `deploy/` 子模块（backend + worker 双端对称），包含 `preflight.ts`、`workerDeploy.ts`、`pagesDeploy.ts`、`triggers.ts`、`assetsUpload.ts`、`uploadForm.ts`、`headers.ts`、`types.ts` 共 9 个子文件。
+  - 部署 API 调用注入 `User-Agent: wrangler/4.112.0`，使 CF 识别为 wrangler 部署。
+  - Worker 部署支持 Versions API（已存在 Worker）和传统 PUT（新 Worker）双路径。
+  - Pages 部署实现 JWT 自动刷新、Hash 校验、分批上传及部署状态轮询。
+  - Catalog Schema 扩展支持 Durable Objects、Service、Queue 绑定及 Migrations、Placement、Limits、Tail Consumers 等高级配置。
+- **两阶段部署流程**：新增 `POST /api/store/preflight` 预检端点（backend + worker 对称），在用户确认部署前检查 Worker 存在性、配置差异（Config Diff）、Secrets 覆盖情况。
+  - 前端 `StoreDeployDialog` 改造为自动预检流程：点击「确认部署」时自动先预检，无问题则直接部署，有配置差异或警告时展示结果等待用户二次确认。
+
+### ♻️ 重构
+
+- **catalogDeploy.ts 精简**：部署逻辑全部迁移至 `deploy/` 模块，`catalogDeploy.ts` 仅保留 re-export 维持向后兼容。
+
 ## [1.3.6] - 2026-07-21
 
 ### 🚀 新特性

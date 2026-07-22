@@ -6,7 +6,7 @@ import {
   ensureDefaultCatalogSource, getDefaultCatalogSource,
 } from '../db/models';
 import { validateCatalog, type Catalog, type CatalogTemplate } from '../services/catalogValidator';
-import { deployTemplate } from '../services/catalogDeploy';
+import { deployTemplate, preflightDeploy } from '../services/catalogDeploy';
 import { getAccountById } from '../db/models';
 import { assertUrlSafe } from '../services/ssrfGuard';
 
@@ -259,7 +259,47 @@ app.get('/init', async (c) => {
   return c.json({ success: true });
 });
 
-// ============ Deploy ============
+// ============ Shared helper: find template from enabled sources ============
+
+async function findTemplate(c: any, templateId: string): Promise<CatalogTemplate | null> {
+  const sources = await getEnabledCatalogSources(c.env.DB);
+  for (const source of sources) {
+    const catalog = await fetchSourceCatalog(c, source);
+    if (catalog?.templates) {
+      const found = catalog.templates.find(t => t.id === templateId) || null;
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// ============ Preflight (两阶段部署: 预检) ============
+
+app.post('/preflight', async (c) => {
+  const body = await c.req.json();
+  const { accountId, templateId, name, bindingSelections, secretValues, deployType } = body;
+
+  if (!accountId || !templateId || !name) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'accountId, templateId, name are required' } }, 400);
+  }
+
+  const account = await getAccountById(c.env.DB, accountId);
+  if (!account) return c.json({ error: { code: 'NOT_FOUND', message: 'Account not found' } }, 404);
+
+  const template = await findTemplate(c, templateId);
+  if (!template) return c.json({ error: { code: 'NOT_FOUND', message: 'Template not found' } }, 404);
+
+  const result = await preflightDeploy({
+    account, encryptionKey: c.env.ENCRYPTION_KEY, template, name,
+    bindingSelections: bindingSelections || {},
+    secretValues: secretValues || {},
+    deployType: deployType || undefined,
+  });
+
+  return c.json(result, 200);
+});
+
+// ============ Deploy (两阶段部署: 确认执行) ============
 
 app.post('/deploy', async (c) => {
   const body = await c.req.json();
@@ -272,16 +312,7 @@ app.post('/deploy', async (c) => {
   const account = await getAccountById(c.env.DB, accountId);
   if (!account) return c.json({ error: { code: 'NOT_FOUND', message: 'Account not found' } }, 404);
 
-  // Find template from enabled sources
-  const sources = await getEnabledCatalogSources(c.env.DB);
-  let template: CatalogTemplate | null = null;
-  for (const source of sources) {
-    const catalog = await fetchSourceCatalog(c, source);
-    if (catalog?.templates) {
-      template = catalog.templates.find(t => t.id === templateId) || null;
-      if (template) break;
-    }
-  }
+  const template = await findTemplate(c, templateId);
   if (!template) return c.json({ error: { code: 'NOT_FOUND', message: 'Template not found' } }, 404);
 
   const result = await deployTemplate({

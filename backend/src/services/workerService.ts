@@ -144,7 +144,7 @@ async function deployWorkerAssets(
 
   const sessionResp = await fetch(`${CF_BASE}/accounts/${accountId}/workers/scripts/${scriptName}/assets-upload-session`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders },
+    headers: { 'Content-Type': 'application/json', ...authHeaders, 'User-Agent': 'wrangler/4.112.0' },
     body: JSON.stringify({ manifest }),
   });
   const sessionJson = await sessionResp.json() as any;
@@ -180,7 +180,7 @@ async function deployWorkerAssets(
     }
     const upResp = await fetch(`${CF_BASE}/accounts/${accountId}/workers/assets/upload?base64=true`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${sessionJwt}` },
+      headers: { Authorization: `Bearer ${sessionJwt}`, 'User-Agent': 'wrangler/4.112.0' },
       body: upForm,
     });
     if (!upResp.ok) {
@@ -328,7 +328,7 @@ export async function deployWorker(
 
   const resp = await fetch(`${CF_BASE}/accounts/${accountId}/workers/scripts/${name}`, {
     method: 'PUT',
-    headers: authHeaders,
+    headers: { ...authHeaders, 'User-Agent': 'wrangler/4.112.0' },
     body: form,
   });
   const respJson = await resp.json() as any;
@@ -346,7 +346,7 @@ export async function deployWorker(
     if (logsEnabled) obsBody.logs = { enabled: true, persist: true, invocation_logs: true, head_sampling_rate: 1 };
     const obsResp = await fetch(`${CF_BASE}/accounts/${accountId}/workers/scripts/${name}/script-settings`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      headers: { 'Content-Type': 'application/json', ...authHeaders, 'User-Agent': 'wrangler/4.112.0' },
       body: JSON.stringify({ observability: obsBody }),
     });
     if (!obsResp.ok) {
@@ -384,7 +384,7 @@ export async function deployWorker(
       if (!versionId) {
         try {
           const versionsResp = await fetch(`${CF_BASE}/accounts/${accountId}/workers/scripts/${name}/versions`, {
-            headers: authHeaders,
+            headers: { ...authHeaders, 'User-Agent': 'wrangler/4.112.0' },
           });
           if (versionsResp.ok) {
             const versionsJson = await versionsResp.json() as any;
@@ -402,7 +402,7 @@ export async function deployWorker(
       if (versionId) {
         const depResp = await fetch(`${CF_BASE}/accounts/${accountId}/workers/scripts/${name}/deployments`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...authHeaders },
+          headers: { 'Content-Type': 'application/json', ...authHeaders, 'User-Agent': 'wrangler/4.112.0' },
           body: JSON.stringify({
             strategy: 'percentage',
             versions: [{ percentage: 100, version_id: versionId }],

@@ -68,7 +68,7 @@ async function deployWorkerAssets(
     if (!hashToBuffer.has(hash)) hashToBuffer.set(hash, f.buffer);
   }
   const sessionResp: any = await cfFetch(account, `/accounts/${accountId}/workers/scripts/${scriptName}/assets-upload-session`, encryptionKey, {
-    method: 'POST', body: JSON.stringify({ manifest }),
+    method: 'POST', body: JSON.stringify({ manifest }), headers: { 'User-Agent': 'wrangler/4.112.0' },
   });
   const sessionJwt: string | undefined = sessionResp?.result?.jwt;
   const buckets: string[][] = sessionResp?.result?.buckets || [];
@@ -95,7 +95,7 @@ async function deployWorkerAssets(
       upForm.append(hash, new Blob([uint8ToBase64(buf)], { type: 'application/octet-stream' }), hash);
     }
     const upResp = await fetch(`${CF_API_BASE}/accounts/${accountId}/workers/assets/upload?base64=true`, {
-      method: 'POST', headers: { Authorization: `Bearer ${sessionJwt}` }, body: upForm,
+      method: 'POST', headers: { Authorization: `Bearer ${sessionJwt}`, 'User-Agent': 'wrangler/4.112.0' }, body: upForm,
     });
     if (!upResp.ok) { const txt = await upResp.text(); throw new Error(`assets upload failed (bucket ${bi + 1}/${buckets.length}): ${upResp.status} ${txt} (uploadJwtLen=${sessionJwt!.length})`); }
     const upJson = await upResp.json() as any;

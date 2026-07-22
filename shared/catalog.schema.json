@@ -42,15 +42,23 @@
       "required": ["type", "name"],
       "additionalProperties": false,
       "properties": {
-        "type": { "enum": ["kv", "d1", "r2", "ai", "var"] },
+        "type": { "enum": ["kv", "d1", "r2", "ai", "var", "durable_object", "service", "queue"] },
         "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
         "title": { "type": "string", "description": "绑定显示名（自由文本）。" },
         "resourceName": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]*$", "description": "Cloudflare 资源名（D1/KV/R2）。缺省时用 templateId-bindingName 兜底。" },
         "action": { "enum": ["create-or-reuse", "prompt"] },
         "required": { "type": "boolean" },
         "secret": { "type": "boolean", "description": "仅对 type:var 生效。true/缺省=作为加密 secret 写入（secret_text，前端显示密码框）；false=作为明文环境变量写入（plain_text，前端显示普通文本框）。" },
+        "value": { "type": "string", "description": "仅对 type:var 生效。var 的默认值：action=prompt 时前端输入框预填此值，用户未修改则用此值部署；action 非 prompt 时直接使用此值部署。" },
         "initSqlUrl": { "type": "string", "format": "uri" },
-        "initSql": { "type": "string" }
+        "initSql": { "type": "string" },
+        "className": { "type": "string", "description": "DO class 名（仅 durable_object）" },
+        "scriptName": { "type": "string", "description": "DO 所在脚本名（跨 Worker 引用，仅 durable_object）" },
+        "environment": { "type": "string", "description": "环境名（durable_object / service）" },
+        "service": { "type": "string", "description": "目标 Worker 服务名（仅 service）" },
+        "entrypoint": { "type": "string", "description": "入口点（仅 service）" },
+        "queueName": { "type": "string", "description": "队列名（仅 queue）" },
+        "deliveryDelay": { "type": "number", "description": "投递延迟秒数（仅 queue）" }
       },
       "allOf": [
         {
@@ -133,7 +141,76 @@
               }
             }
           }
-        }
+        },
+        "migrations": {
+          "type": "array",
+          "description": "Durable Object 迁移配置。按顺序执行，每个 tag 代表一次迁移。",
+          "items": {
+            "type": "object",
+            "required": ["tag"],
+            "additionalProperties": false,
+            "properties": {
+              "tag": { "type": "string" },
+              "new_classes": { "type": "array", "items": { "type": "string" } },
+              "renamed_classes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["from", "to"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "from": { "type": "string" },
+                    "to": { "type": "string" }
+                  }
+                }
+              },
+              "deleted_classes": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "keep_vars": {
+          "type": "boolean",
+          "default": true,
+          "description": "部署时保留已有的明文环境变量。默认 true（更安全）。"
+        },
+        "keep_secrets": {
+          "type": "boolean",
+          "default": true,
+          "description": "部署时保留已有的加密 Secrets。默认 true（更安全）。"
+        },
+        "keep_bindings": {
+          "type": "boolean",
+          "default": true,
+          "description": "部署时保留已有的非 var/secret 绑定（KV、D1、R2 等）。默认 true（更安全）。wrangler 对应 metadata.keep_bindings 字段。"
+        },
+        "placement": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "enum": ["smart", "off"] }
+          }
+        },
+        "tail_consumers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["service"],
+            "additionalProperties": false,
+            "properties": {
+              "service": { "type": "string" },
+              "environment": { "type": "string" }
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu_ms": { "type": "number" },
+            "memory_mb": { "type": "number" }
+          }
+        },
+        "logpush": { "type": "boolean", "default": false }
       },
       "allOf": [
         {
