@@ -81,6 +81,11 @@ CF Manager 是面向开发者 / 运维的一站式 Cloudflare 多账户统一运
 - 浏览器渲染 API (`/v1/browser/render`)
 - 详见 [API 文档](docs/api-v1.md)
 
+### 应用商店
+- 内置 Catalog 模板市场，一键部署 Workers / Pages 应用
+- 支持添加第三方 Catalog 源，扩展模板库
+- 部署前参数配置预览，自动关联选定账户
+
 ### 系统设置
 - 代理配置：支持 HTTP/HTTPS 和 SOCKS5 协议，所有 Cloudflare API 请求均走代理；⚠️ 代理会改变请求出口 IP，频繁跨地域切换 IP 极易触发 Cloudflare 风控限流与账号封禁，请谨慎使用
 - 缓存管理：一键清除 SDK 客户端和区域缓存
@@ -236,6 +241,7 @@ cf-manager/
 │   └── src/
 │       ├── api/             # API 调用封装
 │       ├── views/           # 页面组件
+│       ├── components/      # 可复用组件（StoreDeployDialog 等）
 │       ├── stores/          # Pinia 状态管理
 │       └── utils/           # 工具函数
 ├── worker/                  # Cloudflare Pages 部署版
@@ -249,7 +255,9 @@ cf-manager/
 │       ├── nginx.conf.template  # Nginx 配置模板（支持 BASE_URL）
 │       └── entrypoint.sh        # 容器启动脚本
 ├── shared/                  # 前后端共享配置
-│   └── model-pricing.json    # AI 模型定价（含缓存价格）
+│   ├── model-pricing.json    # AI 模型定价（含缓存价格）
+│   ├── catalog.schema.json   # Catalog 模板 JSON Schema
+│   └── catalogValidator.ts   # Catalog 校验器源码
 ├── docs/                    # 文档
 │   ├── api-v1.md            # 外部 API 接口文档
 │   ├── account-auth.md      # 账户认证方式说明
@@ -287,6 +295,9 @@ cf-manager/
 
 ### 系统设置
 ![设置](images/settings.png)
+
+### 应用商店
+![应用商店](images/store.png)
 
 ---
 
