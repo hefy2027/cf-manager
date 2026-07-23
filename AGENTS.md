@@ -166,6 +166,7 @@ chmod +x deploy.sh && ./deploy.sh
 4. **Cloudflare API 调用**：backend 通过 `cloudflare` SDK（`getCfClient()`），worker 通过 `fetch` 封装（`cfFetch()`）
 5. **前端 base 路径**：Worker 版固定为 `/admin/`，Docker 版通过 `BASE_URL` 环境变量配置
 6. **提交前检查**：确保两端（backend + worker）功能同步，`CHANGELOG.md` 已更新版本号
+7. **D1 数据库迁移**：GitHub Actions 部署时自动执行 `schema.sql`（建表）+ `migrations.sql`（列级迁移），新增列只需编辑 `worker/src/db/migrations.sql`，无需修改 `deploy-cf.yml`。Docker 版（SQLite）通过 `initDb()` 在启动时自动迁移
 
 ## 功能场景索引
 
@@ -218,6 +219,7 @@ chmod +x deploy.sh && ./deploy.sh
 | 任务 | Docker 版 (backend/) | Worker 版 (worker/) |
 |---|---|---|
 | 建表/初始化 | `src/db.ts` | `src/db/schema.sql` |
+| 列级迁移 | `src/db.ts`（`initDb` 内联） | `src/db/migrations.sql` |
 | 数据模型/查询 | `src/models/account.ts` | `src/db/models.ts`（集中） |
 | 审计日志 | `src/models/auditLog.ts` | `src/db/models.ts` |
 | 配额使用 | `src/models/quotaUsage.ts` | `src/db/models.ts` |
@@ -280,6 +282,7 @@ chmod +x deploy.sh && ./deploy.sh
 | Catalog 校验器预编译 | `scripts/gen-catalog-validator.js` |
 | Docker Compose | `docker-compose.yml` |
 | Docker 部署脚本 | `deploy.sh` |
+| D1 数据库迁移脚本 | `worker/src/db/migrations.sql` |
 | 后端 Dockerfile | `docker/backend/Dockerfile` |
 | 前端 Dockerfile | `docker/frontend/Dockerfile` |
 | Nginx 配置模板 | `docker/frontend/nginx.conf.template` |
