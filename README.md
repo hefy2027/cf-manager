@@ -299,6 +299,10 @@ cf-manager/
 [MIT](LICENSE) © 2024 CF Manager Contributors
 
 
+## 相关项目
+
+- [cf-store](https://github.com/hefy2027/cf-store)：CF Manager「应用商店」的 Catalog 模板仓库（应用/Worker 部署模板源），如需贡献或自托管模板可参考此仓库。
+
 ## 社区
 
 本开源项目已链接并认可 [LINUX DO 社区](https://linux.do)。
