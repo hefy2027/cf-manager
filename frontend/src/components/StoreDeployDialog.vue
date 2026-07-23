@@ -50,6 +50,16 @@
           </n-space>
         </n-form-item>
 
+        <!-- 1101 错误解决提示：仅在非「仅 Pages」部署时展示，告知用户 Worker 部署后遇到 1101 可通过添加自定义域名解决 -->
+        <n-alert
+          v-if="!isPagesOnly"
+          type="info"
+          :show-icon="true"
+          style="font-size: 13px; margin: 4px 0 12px 0"
+        >
+          部署后若访问出现 1101 错误，可在 Worker 设置 → 自定义域名 中添加一个域名即可解决
+        </n-alert>
+
 
 
         <!-- Bindings -->
