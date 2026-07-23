@@ -189,7 +189,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, h } from 'vue';
-import { NTag, NSpace, NButton, useMessage } from 'naive-ui';
+import { NTag, NSpace, NButton, NA, useMessage } from 'naive-ui';
 import type { DataTableColumns } from 'naive-ui';
 import { workersApi } from '../api/workers';
 import { formatCN } from '../utils/dateFormat';
@@ -622,18 +622,16 @@ async function handleBatchDeleteDeployments() {
 
 // Columns
 const pagesDomainColumns: DataTableColumns<any> = [
-  { title: '域名', key: 'name', minWidth: 120, ellipsis: { tooltip: true } },
+  {
+    title: '域名', key: 'name', minWidth: 180, ellipsis: { tooltip: true },
+    render: (row) => h(NA, { href: `https://${row.name}`, target: '_blank', type: 'primary' }, { default: () => row.name }),
+  },
   { title: '状态', key: 'status', width: 100, render: (row) => h(NTag, { size: 'small', type: row.status === 'active' ? 'success' : 'warning' }, { default: () => row.status || '-' }) },
   {
-    title: '操作', key: 'actions', width: 120,
-    render: (row) => h(NSpace, null, {
-      default: () => [
-        h(NButton, { size: 'tiny', type: 'info', onClick: () => window.open(`https://${row.name}`, '_blank') }, { default: () => '打开' }),
-        ...(isDemoAccount(accountId.value) ? [] : [
-          h(NButton, { size: 'tiny', type: 'error', onClick: () => handleRemovePagesDomain(row) }, { default: () => '删除' }),
-        ]),
-      ]
-    })
+    title: '操作', key: 'actions', width: 80,
+    render: (row) => isDemoAccount(accountId.value)
+      ? null
+      : h(NButton, { size: 'tiny', type: 'error', onClick: () => handleRemovePagesDomain(row) }, { default: () => '删除' }),
   },
 ];
 

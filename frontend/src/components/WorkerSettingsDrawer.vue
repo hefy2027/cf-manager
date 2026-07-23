@@ -315,7 +315,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, h } from 'vue';
-import { NTag, NSpace, NButton, useMessage } from 'naive-ui';
+import { NTag, NSpace, NButton, NA, useMessage } from 'naive-ui';
 import type { DataTableColumns } from 'naive-ui';
 import hljs from 'highlight.js/lib/common';
 import 'highlight.js/styles/github-dark.css';
@@ -747,11 +747,20 @@ const scheduleColumns: DataTableColumns<any> = [
 ];
 
 const domainColumns: DataTableColumns<any> = [
-  { title: '域名', key: 'hostname', minWidth: 120, ellipsis: { tooltip: true } },
+  {
+    title: '域名', key: 'hostname', minWidth: 180, ellipsis: { tooltip: true },
+    render: (row) => h(NA, { href: `https://${row.hostname}`, target: '_blank', type: 'primary' }, { default: () => row.hostname }),
+  },
   { title: '环境', key: 'environment', width: 100, render: (row) => h(NTag, { size: 'small', type: row.environment === 'production' ? 'success' : 'warning' }, { default: () => row.environment || '-' }) },
-  { title: '操作', key: 'actions', width: 80, render: (row) => isDemoAccount(accountId.value)
-    ? null
-    : h(NButton, { size: 'tiny', type: 'error', onClick: () => handleDeleteDomain(row) }, { default: () => '删除' }) },
+  { title: '操作', key: 'actions', width: 140, render: (row) => isDemoAccount(accountId.value)
+    ? h(NButton, { size: 'tiny', type: 'info', onClick: () => window.open(`https://${row.hostname}`, '_blank') }, { default: () => '打开' })
+    : h(NSpace, { size: 4 }, {
+        default: () => [
+          h(NButton, { size: 'tiny', type: 'info', onClick: () => window.open(`https://${row.hostname}`, '_blank') }, { default: () => '打开' }),
+          h(NButton, { size: 'tiny', type: 'error', onClick: () => handleDeleteDomain(row) }, { default: () => '删除' }),
+        ],
+      }),
+  },
 ];
 
 const routeColumns: DataTableColumns<any> = [
