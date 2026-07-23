@@ -55,6 +55,9 @@ jobs:
     # 敏感输入绝不能放在 job 级 env —— 否则每个步骤的「env:」头都会把明文打印到日志。
     # 改为第一步就注册脱敏并写入 $GITHUB_ENV，后续步骤一律用 $VAR 引用（日志中均为 ***）。
     steps:
+      # checkout 必须在调用本地 composite action 之前执行，否则 runner 找不到 action.yml
+      - uses: actions/checkout@v5
+
       - name: Mask secrets and export to env
         run: |
           echo "::add-mask::${{ github.event.inputs.cf_api_key }}"

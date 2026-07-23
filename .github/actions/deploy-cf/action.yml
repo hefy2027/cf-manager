@@ -26,8 +26,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Checkout
-      uses: actions/checkout@v5
+    # checkout 由调用方在工作流中执行（本地 action 需要先 checkout 才能 found action.yml）
 
     - name: Setup Node.js
       uses: actions/setup-node@v5
