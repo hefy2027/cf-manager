@@ -28,86 +28,21 @@ CF Manager 是面向开发者 / 运维的一站式 Cloudflare 多账户统一运
 
 ## 功能特性
 
-### 多账户管理
-- 支持最小权限 **API Token（推荐）** 与高权限 **Global API Key** 两种认证方式，详见 [账户认证文档](docs/account-auth.md)
-- Global API Key 权限覆盖全账号所有域名与资源，泄露将导致全部资产面临风险，**日常运维强烈建议使用细粒度 API Token**
-- 多账户统一管理，凭证自动加密存储（AES）
-- 支持在多个**本人合法授权的自有账户**间手动切换，区分测试 / 业务环境；自动配额切换仅为技术调度逻辑，启用后可能违反 Cloudflare 服务协议，不建议生产环境开启
-- 出于安全原因，不再提供 cf-reg 批量注册功能
-
-### 仪表盘
-- 实时展示各账户今日配额使用量（Workers 请求数、AI 神经元、浏览器渲染时长）
-- 可视化进度条和最近操作审计日志
-
-### Workers / Pages 管理
-- 查看、部署、删除 Workers 脚本和 Pages 项目
-- 支持单个部署和跨账户批量部署（Workers + Pages）；批量跨账号高频同步部署易触发平台异常操作检测，请降低操作频率
-- 管理脚本绑定、环境变量、路由、自定义域名
-- Pages 部署历史查看和回滚
-
-### DNS 管理
-- 按域名查看和管理 DNS 记录（A / AAAA / CNAME / MX / TXT 等）
-- 一键切换 Cloudflare 代理状态
-- 批量操作支持
-
-### 隧道管理（Cloudflare Tunnel）
-- 创建、查看、删除隧道，获取连接令牌和连接状态
-- **Ingress 配置**：可视化编辑域名→本地服务映射，支持子域名/域名拆分、协议（HTTP/HTTPS/TCP）+ 端口、路径正则
-- **一键回源向导**：新建/复用隧道 + 自动创建 DNS CNAME + ingress 配置，部分失败自动回滚
-
-### 通用规则引擎
-- 统一管理 Cloudflare Rulesets API 的 **8 种规则类型**：
-  - **Zone 级**：回源（Origin）、URL 重写、请求头转换、响应头转换、缓存设置、防火墙、速率限制
-  - **Account 级**：重定向（Redirect）
-- **结构化配置表单**：每种规则类型提供直观表单（无需手写 JSON），支持高级模式切换
-- **表达式生成器**：匹配类型下拉 + 子域名/路径输入 + 实时预览，无需手写 Cloudflare 表达式语法
-
-### 存储管理
-- **KV 命名空间**：浏览键值对，支持创建/编辑/删除命名空间和键
-- **D1 数据库**：管理数据库，SQL 查询执行，表结构创建/修改（添加列、重命名列、删除列、删除表）
-- **R2 存储桶**：管理对象，支持文件上传/下载/删除，图片在线预览
-
-### AI 推理
-- 支持所有 Cloudflare Workers AI 模型
-- **Prompt Caching 感知计费**：自动识别 GLM-5.2 / Kimi K2.5 / K2.6 / K2.7-code 的缓存命中 token，按 CF 折扣价精准估算神经元用量
-- **单账号请求缓存优化**：在同一账户内对重复推理请求做缓存复用，降低单账号自身神经元消耗，请勿用于跨账号分摊配额
-- 流式对话界面，Reasoning 模型思考过程实时展示
-- 历史对话上下文支持
-- 多账户调度：支持手动切换已授权账号区分测试 / 业务环境；自动配额切换仅为纯技术演示逻辑，启用后可能违反 Cloudflare 服务协议，不建议生产环境开启
-
-### 浏览器渲染
-- 支持 5 种渲染模式：截图、HTML 内容、Markdown 转换、PDF 生成、链接提取
-- 多账户限速和配额管理
-- 渲染时长实时统计
-- 仅允许 `http/https` 协议，并对内网 / 保留 IP 做拦截以缓解 SSRF 风险；使用前请自行评估目标 URL 安全性
-
-### OpenAI 兼容 API（仅限内网本地调试）
-本地内置 `/v1/chat/completions`、`/v1/models` 以及浏览器渲染接口，仅推荐**局域网本地开发调试**使用：
-
-- ⚠️ 禁止将该接口直接公网暴露、对外提供给第三方商用；
-- 公网开放多账户自动调度接口会违反 Cloudflare 服务条款，存在账号封禁风险；
-- 仅用于自有项目本地对接调试，不支持对外分发算力服务。
-- 接口完全兼容 OpenAI SDK，方便本地对接 Cursor、ChatGPT-Next-Web、Open WebUI 等自研测试工具
-- 支持流式和非流式响应，自动注入 `stream_options.include_usage` 确保用量可追踪
-- Prompt Caching 自动检测与折扣计费
-- 浏览器渲染 API (`/v1/browser/render`)
-- 详见 [API 文档](docs/api-v1.md)
-
-### 应用商店
-- 内置 Catalog 模板市场，一键部署 Workers / Pages 应用
-- 支持添加第三方 Catalog 源，扩展模板库
-- 部署前参数配置预览，自动关联选定账户
-
-### 系统设置
-- 代理配置：支持 HTTP/HTTPS 和 SOCKS5 协议，所有 Cloudflare API 请求均走代理；⚠️ 代理会改变请求出口 IP，频繁跨地域切换 IP 极易触发 Cloudflare 风控限流与账号封禁，请谨慎使用
-- 缓存管理：一键清除 SDK 客户端和区域缓存
-- 定时任务框架（可扩展）
-
-### 安全特性
-- API Token 加密存储（AES 加密）
-- 可选的 API Secret 认证保护管理界面
-- 管理界面隐藏在 `/admin/` 路径，根路径伪装为 nginx 默认页
-- 操作审计日志
+| 模块 | 核心能力 |
+|---|---|
+| **多账户管理** | API Token / Global API Key 双认证 · 凭证 AES 加密 · 多账户统一切换 ([认证文档](docs/account-auth.md)) |
+| **仪表盘** | 各账户配额用量实时展示（Workers、AI、渲染）· 可视化进度条 · 操作审计 |
+| **Workers / Pages** | 脚本/项目 CRUD · 单/跨账户批量部署 · 绑定/环境变量/路由/自定义域名 · Pages 回滚 |
+| **DNS 管理** | A/AAAA/CNAME/MX/TXT 记录管理 · 一键代理开关 · 批量操作 |
+| **隧道管理** | Tunnel 创建/删除 · Ingress 可视化编辑（域名↔服务映射）· 一键回源向导（DNS CNAME + ingress 自动配置） |
+| **规则引擎** | 8 种规则类型（回源、URL 重写、请求/响应头转换、缓存、防火墙、限速、重定向）· 结构化表单+高级模式 · 表达式生成器 |
+| **存储管理** | KV 键值 CRUD · D1 数据库 SQL 查询 + 表结构变更 · R2 文件上传/下载/预览 |
+| **AI 推理** | Workers AI 全模型 · Prompt Caching 感知计费 · 流式对话 + Reasoning 可视化 · 历史上下文 · 多账户调度 |
+| **浏览器渲染** | 截图 / HTML / Markdown / PDF / 链接提取 5 种模式 · 限速+配额管理 · SSRF 防护 |
+| **OpenAI 兼容 API** | `/v1/chat/completions`、`/v1/models`、浏览器渲染接口 · 流式+非流式 · 仅限内网本地调试 ([API 文档](docs/api-v1.md)) |
+| **应用商店** | 内置 Catalog 模板市场 · 第三方源扩展 · 一键部署 Workers/Pages |
+| **系统设置** | HTTP/SOCKS5 代理 · 缓存清除 · 定时任务扩展 |
+| **安全特性** | API Token AES 加密 · 可选登录密码 · `/admin/` 路径隐藏 + nginx 伪装 · 审计日志 |
 
 ---
 
@@ -284,44 +219,35 @@ cf-manager/
 
 ## 功能截图
 
-### 仪表盘
-![仪表盘](images/dashboard.png)
-
-### 账号管理
-![账号管理](images/accounts.png)
-
-### Workers / Pages
-![Workers](images/workers.png)
-
-### DNS 管理
-![DNS 管理](images/dns.png)
-
-### 存储管理（KV / D1 / R2）
-![存储管理](images/storage.png)
-
-### AI 推理
-![AI 推理](images/ai.png)
-
-### 浏览器渲染
-![浏览器渲染](images/browser-render.png)
-
-### 系统设置
-![设置](images/settings.png)
-
-### 应用商店
-![应用商店](images/store.png)
-
-### 隧道管理
-![隧道管理](images/tunnels.png)
-
-### 规则引擎
-![规则引擎](images/rules-engine.png)
+<table>
+  <tr>
+    <td width="33%"><img src="images/dashboard.png" alt="仪表盘"><br><em>仪表盘</em></td>
+    <td width="33%"><img src="images/accounts.png" alt="账号管理"><br><em>账号管理</em></td>
+    <td width="33%"><img src="images/workers.png" alt="Workers / Pages"><br><em>Workers / Pages</em></td>
+  </tr>
+  <tr>
+    <td><img src="images/dns.png" alt="DNS 管理"><br><em>DNS 管理</em></td>
+    <td><img src="images/storage.png" alt="存储管理"><br><em>存储管理（KV / D1 / R2）</em></td>
+    <td><img src="images/ai.png" alt="AI 推理"><br><em>AI 推理</em></td>
+  </tr>
+  <tr>
+    <td><img src="images/browser-render.png" alt="浏览器渲染"><br><em>浏览器渲染</em></td>
+    <td><img src="images/settings.png" alt="系统设置"><br><em>系统设置</em></td>
+    <td><img src="images/store.png" alt="应用商店"><br><em>应用商店</em></td>
+  </tr>
+  <tr>
+    <td><img src="images/tunnels.png" alt="隧道管理"><br><em>隧道管理</em></td>
+    <td><img src="images/rules-engine.png" alt="规则引擎"><br><em>规则引擎</em></td>
+    <td></td>
+  </tr>
+</table>
 
 ---
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=hefy2027/cf-manager&type=Date)](https://star-history.com/#hefy2027/cf-manager&Date)
+[![GitHub stars](https://img.shields.io/github/stars/hefy2027/cf-manager?style=social)](https://github.com/hefy2027/cf-manager/stargazers)
+👉 [查看 Star 增长趋势图](https://star-history.com/#hefy2027/cf-manager&Date)
 
 ## License
 
