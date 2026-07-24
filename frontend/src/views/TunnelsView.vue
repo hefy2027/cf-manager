@@ -492,7 +492,6 @@ const configTunnelName = ref('');
 const loadingConfig = ref(false);
 const savingConfig = ref(false);
 const ingressEntries = ref<Array<{ domain: string; subdomain: string; path: string; protocol: string; port: number; customService: string }>>([]);
-const boundHostnames = ref<string[]>([]);
 const tunnelZones = ref<Array<{ id: string; name: string }>>([]);
 const zoneOptions = computed(() => tunnelZones.value.map((z) => ({ label: z.name, value: z.name })));
 
@@ -784,23 +783,6 @@ const actionJsonPlaceholder = computed(() => {
       return '{"action":"block","action_parameters":{"characteristics":["ip"],"period":60,"requests_per_period":100}}';
     default:
       return '{"action":"rewrite","action_parameters":{...}}';
-  }
-});
-
-const actionJsonHint = computed(() => {
-  switch (selectedRulePhase.value) {
-    case 'http_request_transform':
-      return 'URL 重写：修改请求路径。action 通常为 rewrite。';
-    case 'http_request_late_transform':
-      return '请求头转换：添加/修改/删除请求头。action 通常为 rewrite。';
-    case 'http_response_headers_transform':
-      return '响应头转换：添加/修改/删除响应头。action 通常为 rewrite。';
-    case 'http_request_cache_settings':
-      return '缓存设置：控制 CDN 缓存行为。action 通常为 set_cache_settings。';
-    case 'http_ratelimit':
-      return '速率限制：按 IP/路径等维度限流。action 通常为 block 或 challenge。';
-    default:
-      return '';
   }
 });
 
