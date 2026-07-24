@@ -246,8 +246,7 @@ cf-manager/
 
 ## Star History
 
-[![GitHub stars](https://img.shields.io/github/stars/hefy2027/cf-manager?style=social)](https://github.com/hefy2027/cf-manager/stargazers)
-👉 [查看 Star 增长趋势图](https://star-history.com/#hefy2027/cf-manager&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=hefy2027/cf-manager&type=Date)](https://star-history.com/#hefy2027/cf-manager&Date)
 
 ## License
 
