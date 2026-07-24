@@ -1,5 +1,45 @@
 # Changelog
 
+## [1.3.8] - 2026-07-24
+
+### 🚀 新特性
+
+- **隧道管理（Cloudflare Tunnel）**：account 级 CRUD + 连接状态 + 连接令牌 + Ingress 配置查看/编辑，双后端对称（backend + worker）。
+  - Ingress 配置 UI：子域名/域名拆分选择、协议（HTTP/HTTPS/TCP/自定义）+ 端口、路径正则，6 列直观编辑。
+  - CNAME 扫描自动发现隧道绑定域名。
+- **通用规则引擎**：替代原有单一「回源规则」，统一支持 Cloudflare Rulesets API 的 8 种 Phase：
+  - Zone 级：回源（Origin）、URL 重写（Transform）、请求头转换、响应头转换、缓存设置、防火墙（Firewall）、速率限制（Rate Limit）
+  - Account 级：重定向（Redirect）、动态重定向（Dynamic Redirect）
+  - 后端 `rulesetService.ts` 自动根据 Phase 选择 `/zones/{id}/rulesets`（`kind: 'zone'`）或 `/accounts/{id}/rulesets`（`kind: 'root'`），双端对称。
+  - 前端「规则引擎」Tab：Phase 下拉 + 域名选择 + 规则列表 CRUD；账户级 Phase 标注 `[账户级]` 并显示提示条。
+- **结构化规则配置表单（小白模式）**：每种 Phase 提供直观表单，无需手写 JSON：
+  - URL 重写：重写类型（路径/查询参数）+ 新值输入
+  - 请求头/响应头转换：操作类型（设置/添加/删除）+ Header 名 + Header 值
+  - 缓存设置：启用开关 + TTL 模式（遵循源站/自定义）+ TTL 值
+  - 速率限制：触发动作（阻断/验证码挑战/JS 挑战）+ 限流维度多选 + 时间窗口 + 请求数 + 处罚时间
+  - 高级模式开关：开启后可直接输入原始 JSON；编辑规则时自动从 `action_parameters` 解析回表单字段，无法解析时自动切到高级模式。
+- **表达式生成器**：匹配类型下拉（按主机名/按路径前缀/按路径正则/主机名+路径/自定义表达式）+ 子域名 + 路径输入，实时预览生成的 Cloudflare 表达式，无需手写表达式语法。
+- **一键回源向导**：支持新建/复用隧道 + 自动创建 DNS CNAME + ingress 端口/协议/路径配置 + 部分失败回滚（逆序删除已创建资源）。
+  - 向导模式切换：`create` 新建隧道并下发配置；`reuse` 复用已有隧道，自动合并 ingress 去重。
+  - CNAME 冲突检测：hostname 已存在记录时返回 `CNAME_CONFLICT` 错误，提示用户先处理 DNS。
+  - 同账户约束：向导要求隧道与域名属于同一 Cloudflare 账户，直接用隧道账户凭据拉 zone。
+- **前端整合页**：新增「隧道/回源」页面（`TunnelsView.vue`），NTabs 分隧道管理和规则引擎两区，侧栏菜单新增入口。
+- **Worker 设置抽屉域名可点击**：域名列改为可点击链接，优化操作按钮布局。
+- **1101 错误提示**：StoreDeployDialog 添加 1101 错误解决提示。
+
+### ♻️ 重构
+
+- **CI 部署逻辑提取为 composite action**：将 `deploy-cf.yml` 和 `deploy-cf-secret.yml` 中重复的部署逻辑提取为 `.github/actions/deploy-cf/action.yml`，消除两个工作流间的代码重复；checkout 步骤移至工作流以修复本地 action 引用。
+- **移除旧 `originRuleService.ts`**：双端删除已被通用 `rulesetService.ts` 取代的旧回源规则服务；前端清理对应的 `listOriginRules` / `createOriginRule` 等死方法。
+
+### 📝 文档
+
+- **README 增强**：添加相关项目链接、应用商店功能说明与截图。
+
+### 🔒 安全
+
+- **演示账户保护**：规则 DELETE 操作覆盖演示账户保护（`isDemoAccountId` / `isDemoAccount`）。
+
 ## [1.3.7] - 2026-07-23
 
 ### 🚀 新特性

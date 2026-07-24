@@ -124,6 +124,7 @@ import {
   SparklesOutline, ImageOutline, SettingsOutline,
   MenuOutline, SunnyOutline, MoonOutline, ServerOutline,
   CloseOutline, GridOutline, LogOutOutline, StorefrontOutline,
+  GitBranchOutline,
 } from '@vicons/ionicons5';
 import apiClient from './api/client';
 import { message as globalMessage } from './utils/discreteApi';
@@ -169,6 +170,7 @@ const navItems = [
   { label: 'AI', key: 'ai', iconComponent: SparklesOutline },
   { label: '渲染', key: 'browser-render', iconComponent: ImageOutline },
   { label: '商店', key: 'store', iconComponent: StorefrontOutline },
+  { label: '隧道/回源', key: 'tunnels', iconComponent: GitBranchOutline },
   { label: '设置', key: 'settings', iconComponent: SettingsOutline },
 ];
 
@@ -289,6 +291,7 @@ const menuOptions = [
   { label: 'AI 推理', key: 'ai', icon: renderIcon(SparklesOutline) },
   { label: '浏览器渲染', key: 'browser-render', icon: renderIcon(ImageOutline) },
   { label: '模板商店', key: 'store', icon: renderIcon(StorefrontOutline) },
+  { label: '隧道/回源', key: 'tunnels', icon: renderIcon(GitBranchOutline) },
   { label: '设置', key: 'settings', icon: renderIcon(SettingsOutline) },
 ];
 

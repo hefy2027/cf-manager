@@ -2,6 +2,8 @@ import { Hono } from 'hono';
 import type { Env } from '../types';
 import { getActiveAccountsByFeature, addAuditLog } from '../db/models';
 import { cfFetch, cfFetchAll } from '../services/cfApi';
+import { listRules, createRule, updateRule, deleteRule } from '../services/rulesetService';
+import { isDemoAccount } from '../services/demo';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -87,6 +89,44 @@ app.patch('/domains/:domain/proxy', async (c) => {
   await cfFetch(account, `/zones/${zoneId}/dns_records/${body.record_id}`, c.env.ENCRYPTION_KEY, {
     method: 'PATCH', body: JSON.stringify({ proxied: body.proxied }),
   });
+  return c.json({ success: true });
+});
+
+// ============ 通用规则引擎 ============
+
+app.get('/domains/:domain/rules/:phase', async (c) => {
+  const { account, zoneId } = await findAccountByDomain(c.env.DB, c.env.ENCRYPTION_KEY, c.req.param('domain'));
+  if (!account || !zoneId) return c.json({ error: { code: 'NOT_FOUND', message: '域名不存在' } }, 404);
+  return c.json(await listRules(account, zoneId, c.req.param('phase'), c.env.ENCRYPTION_KEY));
+});
+
+app.post('/domains/:domain/rules/:phase', async (c) => {
+  const body = await c.req.json();
+  const { description, expression, action, action_parameters, enabled } = body;
+  if (!expression || !action) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'expression and action are required' } }, 400);
+  const { account, zoneId } = await findAccountByDomain(c.env.DB, c.env.ENCRYPTION_KEY, c.req.param('domain'));
+  if (!account || !zoneId) return c.json({ error: { code: 'NOT_FOUND', message: '域名不存在' } }, 404);
+  const rule = await createRule(account, zoneId, c.req.param('phase'), { description, expression, action, action_parameters, enabled }, c.env.ENCRYPTION_KEY);
+  await addAuditLog(c.env.DB, { account_id: account.id, action: 'create_rule', target: c.req.param('domain'), detail: `phase=${c.req.param('phase')} action=${action}`, status: 'success' });
+  return c.json(rule, 201);
+});
+
+app.put('/domains/:domain/rules/:phase/:ruleId', async (c) => {
+  const body = await c.req.json();
+  const { description, expression, action, action_parameters, enabled } = body;
+  if (!expression || !action) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'expression and action are required' } }, 400);
+  const { account, zoneId } = await findAccountByDomain(c.env.DB, c.env.ENCRYPTION_KEY, c.req.param('domain'));
+  if (!account || !zoneId) return c.json({ error: { code: 'NOT_FOUND', message: '域名不存在' } }, 404);
+  const rule = await updateRule(account, zoneId, c.req.param('phase'), c.req.param('ruleId'), { description, expression, action, action_parameters, enabled }, c.env.ENCRYPTION_KEY);
+  await addAuditLog(c.env.DB, { account_id: account.id, action: 'update_rule', target: c.req.param('domain'), detail: `phase=${c.req.param('phase')} rule_id=${c.req.param('ruleId')}`, status: 'success' });
+  return c.json(rule);
+});
+
+app.delete('/domains/:domain/rules/:phase/:ruleId', async (c) => {
+  const { account, zoneId } = await findAccountByDomain(c.env.DB, c.env.ENCRYPTION_KEY, c.req.param('domain'));
+  if (!account || !zoneId) return c.json({ error: { code: 'NOT_FOUND', message: '域名不存在' } }, 404);
+  await deleteRule(account, zoneId, c.req.param('phase'), c.req.param('ruleId'), c.env.ENCRYPTION_KEY);
+  await addAuditLog(c.env.DB, { account_id: account.id, action: 'delete_rule', target: c.req.param('domain'), detail: `phase=${c.req.param('phase')} rule_id=${c.req.param('ruleId')}`, status: 'success' });
   return c.json({ success: true });
 });
 

@@ -10,6 +10,7 @@ const routes = [
   { path: '/browser-render', name: 'browser-render', component: () => import('../views/BrowserRenderView.vue') },
   { path: '/settings', name: 'settings', component: () => import('../views/SettingsView.vue') },
   { path: '/store', name: 'store', component: () => import('../views/StoreView.vue') },
+  { path: '/tunnels', name: 'tunnels', component: () => import('../views/TunnelsView.vue'), meta: { title: '隧道/回源' } },
 ];
 
 const router = createRouter({
