@@ -438,11 +438,14 @@ runs:
           else
             echo "未在 D1 中找到匹配部署凭据的账户，跳过 DEMO_ACCOUNT_IDS 设置"
           fi
-          echo "demo_ids=${DEMO_IDS:-\"(无匹配账户)\"}" >> "$GITHUB_OUTPUT"
+          if [ -z "$DEMO_IDS" ]; then
+            DEMO_IDS="(无匹配账户)"
+          fi
+          printf 'demo_ids=%s\n' "$DEMO_IDS" >> "$GITHUB_OUTPUT"
         else
           echo "演示模式已关闭，所有账户均可自由编辑/删除"
           echo "" | wrangler pages secret put DEMO_ACCOUNT_IDS --project-name "$PROJECT" 2>/dev/null || true
-          echo "demo_ids=(关闭)" >> $GITHUB_OUTPUT
+          printf 'demo_ids=%s\n' "(关闭)" >> "$GITHUB_OUTPUT"
         fi
 
     - name: Deploy to Cloudflare Pages
@@ -490,17 +493,29 @@ runs:
 
     - name: Deployment summary
       shell: bash
+      env:
+        SUMMARY_PROJECT_NAME: ${{ inputs.project_name }}
+        SUMMARY_D1_DATABASE_NAME: ${{ inputs.d1_database_name }}
+        SUMMARY_D1_DATABASE_ID: ${{ steps.d1.outputs.database_id }}
+        SUMMARY_KV_NAMESPACE_NAME: ${{ inputs.kv_namespace_name }}
+        SUMMARY_KV_NAMESPACE_ID: ${{ steps.kv.outputs.kv_namespace_id }}
+        SUMMARY_FULL_WIPE: ${{ inputs.full_wipe }}
+        SUMMARY_DEMO_MODE: ${{ inputs.demo_mode }}
+        SUMMARY_DEMO_ACCOUNT_IDS: ${{ steps.secrets.outputs.demo_ids }}
+        SUMMARY_DEPLOY_URL: ${{ steps.deploy.outputs.deploy_url }}
       run: |
-        echo "## 部署完成 ✅" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| 配置项 | 值 |" >> $GITHUB_STEP_SUMMARY
-        echo "|--------|-----|" >> $GITHUB_STEP_SUMMARY
-        echo "| CF 邮箱 | (出于安全不显示) |" >> $GITHUB_STEP_SUMMARY
-        echo "| CF API Key | **** (已隐藏) |" >> $GITHUB_STEP_SUMMARY
-        echo "| Pages 项目 | ${{ inputs.project_name }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| D1 数据库 | ${{ inputs.d1_database_name }} (${{ steps.d1.outputs.database_id }}) |" >> $GITHUB_STEP_SUMMARY
-        echo "| KV 命名空间 | ${{ inputs.kv_namespace_name }} (${{ steps.kv.outputs.kv_namespace_id }}) |" >> $GITHUB_STEP_SUMMARY
-        echo "| 完全覆盖 | ${{ inputs.full_wipe }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| 演示模式 | ${{ inputs.demo_mode }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| 演示保护账户 IDs | ${{ steps.secrets.outputs.demo_ids }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| 访问地址 | ${{ steps.deploy.outputs.deploy_url }} |" >> $GITHUB_STEP_SUMMARY
+        {
+          printf '%s\n' "## 部署完成 ✅"
+          printf '\n'
+          printf '%s\n' "| 配置项 | 值 |"
+          printf '%s\n' "|--------|-----|"
+          printf '%s\n' "| CF 邮箱 | (出于安全不显示) |"
+          printf '%s\n' "| CF API Key | **** (已隐藏) |"
+          printf '| Pages 项目 | %s |\n' "$SUMMARY_PROJECT_NAME"
+          printf '| D1 数据库 | %s (%s) |\n' "$SUMMARY_D1_DATABASE_NAME" "$SUMMARY_D1_DATABASE_ID"
+          printf '| KV 命名空间 | %s (%s) |\n' "$SUMMARY_KV_NAMESPACE_NAME" "$SUMMARY_KV_NAMESPACE_ID"
+          printf '| 完全覆盖 | %s |\n' "$SUMMARY_FULL_WIPE"
+          printf '| 演示模式 | %s |\n' "$SUMMARY_DEMO_MODE"
+          printf '| 演示保护账户 IDs | %s |\n' "$SUMMARY_DEMO_ACCOUNT_IDS"
+          printf '| 访问地址 | %s |\n' "$SUMMARY_DEPLOY_URL"
+        } >> "$GITHUB_STEP_SUMMARY"
