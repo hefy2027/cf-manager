@@ -7,12 +7,12 @@ on:
   workflow_dispatch:
     inputs:
       cf_api_key:
-        description: 'Cloudflare Global API Key（仅在本脚本内使用，绝不打印到日志）'
+        description: 'Cloudflare API Token 或 Global API Key（自动检测，绝不打印到日志）'
         required: true
         type: string
       cf_email:
-        description: 'Cloudflare 账号邮箱（仅在本脚本内使用，绝不打印到日志）'
-        required: true
+        description: 'Cloudflare 账号邮箱（仅 Global API Key 需要，绝不打印到日志）'
+        required: false
         type: string
       project_name:
         description: 'Pages 项目名称'

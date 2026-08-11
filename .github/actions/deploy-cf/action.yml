@@ -3,6 +3,7 @@ description: CF Manager 部署到 Cloudflare Pages 的公共逻辑（D1/KV/构�
 
 # Composite Action —— 由 deploy-cf.yml / deploy-cf-secret.yml 调用
 # 调用方负责设置 env: CLOUDFLARE_API_KEY, CLOUDFLARE_EMAIL, ENCRYPTION_KEY, API_SECRET
+# CLOUDFLARE_API_KEY 可传入 API Token 或 Global API Key；本 action 会自动检测认证类型。
 # 所有部署逻辑集中在此文件，新增表/列迁移只需编辑 schema.sql / migrations.sql
 
 inputs:
@@ -41,16 +42,77 @@ runs:
       shell: bash
       run: npm install -g wrangler
 
+    - name: Detect Cloudflare credential type
+      shell: bash
+      run: |
+        CREDENTIAL="$CLOUDFLARE_API_KEY"
+        if [ -z "$CREDENTIAL" ]; then
+          echo "ERROR: CF_API_KEY 未配置或当前 GitHub Environment 无法读取该 Secret"
+          exit 1
+        fi
+
+        # API Token 和 Global API Key 没有可靠的本地格式标识，优先调用 Token
+        # 验证端点判断；验证失败后再按 Global API Key + Email 验证。
+        TOKEN_VERIFY_RESPONSE=$(curl -sS "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+          -H "Authorization: Bearer $CREDENTIAL" \
+          -H "Content-Type: application/json" || true)
+        TOKEN_IS_VALID=$(printf '%s' "$TOKEN_VERIFY_RESPONSE" | jq -r \
+          '(.success == true) and (.result.status == "active")' 2>/dev/null || printf 'false')
+
+        if [ "$TOKEN_IS_VALID" = "true" ]; then
+          echo "Cloudflare credential type: API Token"
+          echo "CF_AUTH_TYPE=token" >> "$GITHUB_ENV"
+          echo "CLOUDFLARE_API_TOKEN=$CREDENTIAL" >> "$GITHUB_ENV"
+          # Wrangler 优先识别 API Token，清空 Global Key 以避免选错认证方式。
+          echo "CLOUDFLARE_API_KEY=" >> "$GITHUB_ENV"
+          exit 0
+        fi
+
+        if [ -z "$CLOUDFLARE_EMAIL" ]; then
+          echo "ERROR: 提供的 CF_API_KEY 不是有效 API Token；按 Global API Key 使用时必须配置 CF_EMAIL"
+          exit 1
+        fi
+
+        GLOBAL_KEY_VERIFY_RESPONSE=$(curl -sS "https://api.cloudflare.com/client/v4/user" \
+          -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
+          -H "X-Auth-Key: $CREDENTIAL" \
+          -H "Content-Type: application/json" || true)
+        GLOBAL_KEY_IS_VALID=$(printf '%s' "$GLOBAL_KEY_VERIFY_RESPONSE" | jq -r \
+          '.success == true' 2>/dev/null || printf 'false')
+
+        if [ "$GLOBAL_KEY_IS_VALID" != "true" ]; then
+          echo "ERROR: CF_API_KEY 既不是有效 API Token，也无法作为 Global API Key 通过认证"
+          printf '%s' "$GLOBAL_KEY_VERIFY_RESPONSE" | jq -r '.errors[]?.message' 2>/dev/null || true
+          exit 1
+        fi
+
+        echo "Cloudflare credential type: Global API Key"
+        echo "CF_AUTH_TYPE=global_key" >> "$GITHUB_ENV"
+        echo "CLOUDFLARE_API_TOKEN=" >> "$GITHUB_ENV"
+
     - name: Resolve Cloudflare Account ID
       shell: bash
       run: |
-        ACCOUNT_ID=$(wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1 || echo "")
+        if [ "$CF_AUTH_TYPE" = "token" ]; then
+          ACCOUNTS_RESPONSE=$(curl -sS "https://api.cloudflare.com/client/v4/accounts?per_page=50" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" || true)
+        else
+          ACCOUNTS_RESPONSE=$(curl -sS "https://api.cloudflare.com/client/v4/accounts?per_page=50" \
+            -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
+            -H "X-Auth-Key: $CLOUDFLARE_API_KEY" || true)
+        fi
+
+        ACCOUNT_ID=$(printf '%s' "$ACCOUNTS_RESPONSE" | jq -r '.result[0].id // empty' 2>/dev/null || true)
+        if [ -z "$ACCOUNT_ID" ]; then
+          # 兼容无法列出账户、但 Token 已限定到单一账户的情况。
+          ACCOUNT_ID=$(wrangler whoami 2>/dev/null | grep -oE '[0-9a-f]{32}' | head -1 || true)
+        fi
         if [ -z "$ACCOUNT_ID" ]; then
           echo "WARNING: 无法获取 Account ID（多账户或认证异常），D1/KV 操作可能失败"
         else
           echo "Resolved Account ID: $ACCOUNT_ID"
         fi
-        echo "CLOUDFLARE_ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
+        echo "CLOUDFLARE_ACCOUNT_ID=$ACCOUNT_ID" >> "$GITHUB_ENV"
 
     - name: Setup D1 database
       id: d1
@@ -68,10 +130,20 @@ runs:
         fi
 
         # 用 CF REST API 查询 D1 列表（绕开 wrangler d1 list --json 在 4.x 的兼容性问题）
+        cloudflare_api_request() {
+          REQUEST_METHOD="$1"
+          REQUEST_URL="$2"
+          if [ "$CF_AUTH_TYPE" = "token" ]; then
+            curl -sS -X "$REQUEST_METHOD" "$REQUEST_URL" \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          else
+            curl -sS -X "$REQUEST_METHOD" "$REQUEST_URL" \
+              -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
+              -H "X-Auth-Key: $CLOUDFLARE_API_KEY"
+          fi
+        }
         list_d1() {
-          curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/d1/database" \
-            -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
-            -H "X-Auth-Key: $CLOUDFLARE_API_KEY"
+          cloudflare_api_request GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/d1/database"
         }
         DB_LIST=$(list_d1)
         echo "=== CF REST API 查询 D1 数据库结果 ==="
@@ -88,9 +160,8 @@ runs:
           DB_OLD_ID=$(get_db_id "$DB_LIST" "$DB_NAME")
           if [ -n "$DB_OLD_ID" ]; then
             echo "找到数据库 ID: $DB_OLD_ID，正在删除..."
-            curl -s -X DELETE "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/d1/database/$DB_OLD_ID" \
-              -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
-              -H "X-Auth-Key: $CLOUDFLARE_API_KEY" >/dev/null
+            cloudflare_api_request DELETE \
+              "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/d1/database/$DB_OLD_ID" >/dev/null
             sleep 3
             # 确认是否已消失
             DB_LIST2=$(list_d1)
@@ -162,7 +233,11 @@ runs:
       shell: bash
       run: |
         DB_NAME="${{ inputs.d1_database_name }}"
-        API_KEY="$CLOUDFLARE_API_KEY"
+        if [ "$CF_AUTH_TYPE" = "token" ]; then
+          API_CREDENTIAL="$CLOUDFLARE_API_TOKEN"
+        else
+          API_CREDENTIAL="$CLOUDFLARE_API_KEY"
+        fi
         API_EMAIL="$CLOUDFLARE_EMAIL"
         ENC_KEY="$ENCRYPTION_KEY"
 
@@ -186,10 +261,14 @@ runs:
               console.log(Buffer.from(iv).toString('hex') + ':' + Buffer.from(encrypted).toString('hex'));
             });
           });
-        " "$API_KEY" "$ENC_KEY")
+        " "$API_CREDENTIAL" "$ENC_KEY")
 
         echo "插入部署账户..."
-        wrangler d1 execute "$DB_NAME" --remote --command="INSERT INTO accounts (name, auth_type, api_key, email, account_id, enabled_features) VALUES ('Deploy Account', 'global_key', '$ENCRYPTED', '$API_EMAIL', '$ACCOUNT_ID', 'ai,workers,browser_render,dns,storage')"
+        if [ "$CF_AUTH_TYPE" = "token" ]; then
+          wrangler d1 execute "$DB_NAME" --remote --command="INSERT INTO accounts (name, auth_type, api_token, account_id, enabled_features) VALUES ('Deploy Account', 'token', '$ENCRYPTED', '$ACCOUNT_ID', 'ai,workers,browser_render,dns,storage')"
+        else
+          wrangler d1 execute "$DB_NAME" --remote --command="INSERT INTO accounts (name, auth_type, api_key, email, account_id, enabled_features) VALUES ('Deploy Account', 'global_key', '$ENCRYPTED', '$API_EMAIL', '$ACCOUNT_ID', 'ai,workers,browser_render,dns,storage')"
+        fi
 
         # 获取刚插入的账户 ID（用于演示模式保护）
         DEPLOY_ACCOUNT_ID=$(wrangler d1 execute "$DB_NAME" --remote --command="SELECT id FROM accounts WHERE name='Deploy Account' ORDER BY id DESC LIMIT 1" --json 2>/dev/null | node -e "
@@ -221,10 +300,20 @@ runs:
 
         # 用 CF REST API 查询（绕开 wrangler kv namespace list --json 在 4.x 的兼容性问题，
         # 同时保证 account 上下文与后续 wrangler 调用一致）
+        cloudflare_api_request() {
+          REQUEST_METHOD="$1"
+          REQUEST_URL="$2"
+          if [ "$CF_AUTH_TYPE" = "token" ]; then
+            curl -sS -X "$REQUEST_METHOD" "$REQUEST_URL" \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          else
+            curl -sS -X "$REQUEST_METHOD" "$REQUEST_URL" \
+              -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
+              -H "X-Auth-Key: $CLOUDFLARE_API_KEY"
+          fi
+        }
         list_kv() {
-          curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/storage/kv/namespaces" \
-            -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
-            -H "X-Auth-Key: $CLOUDFLARE_API_KEY"
+          cloudflare_api_request GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/storage/kv/namespaces"
         }
         KV_LIST_FULL=$(list_kv)
 
@@ -234,9 +323,8 @@ runs:
           KV_OLD_ID=$(echo "$KV_LIST_FULL" | jq -r --arg name "$KV_NAME" '.result[]? | select(.title==$name) | .id' 2>/dev/null | head -1 || echo "")
           if [ -n "$KV_OLD_ID" ]; then
             echo "删除旧 KV namespace: $KV_OLD_ID"
-            curl -s -X DELETE "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/storage/kv/namespaces/$KV_OLD_ID" \
-              -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
-              -H "X-Auth-Key: $CLOUDFLARE_API_KEY" >/dev/null
+            cloudflare_api_request DELETE \
+              "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/storage/kv/namespaces/$KV_OLD_ID" >/dev/null
             echo "等待删除生效..."
             sleep 5
           else
@@ -311,12 +399,25 @@ runs:
           wrangler pages secret put API_SECRET --project-name "$PROJECT" <<< "$API_SECRET"
         fi
 
-        # 演示模式：保护部署账户（仅 demo_mode=true 时启用）
-        # 以部署时使用的邮箱（CLOUDFLARE_EMAIL）为基准，在 D1 中查询对应账户 ID 并设置保护，
-        # 无论本次是否为 full_wipe（full_wipe 时 seed 写入的账户 email 同样是 CLOUDFLARE_EMAIL）。
+        # 演示模式：保护部署账户（仅 demo_mode=true 时启用）。full_wipe 时直接使用
+        # seed 步骤输出；已有数据库则按凭据类型及 Cloudflare Account ID 查找。
         if [ "${{ inputs.demo_mode }}" = "true" ]; then
+          DEMO_IDS="${{ steps.seed.outputs.deploy_account_id }}"
+          if [ -z "$DEMO_IDS" ] && [ "$CF_AUTH_TYPE" = "token" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            ESC_ACCOUNT_ID=$(printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | sed "s/'/''/g")
+            DEMO_IDS=$(wrangler d1 execute "$DB_NAME" --remote --command="SELECT GROUP_CONCAT(id) AS ids FROM accounts WHERE auth_type='token' AND account_id='$ESC_ACCOUNT_ID'" --json 2>/dev/null | node -e "
+              const input = require('fs').readFileSync('/dev/stdin','utf8');
+              try {
+                const data = JSON.parse(input);
+                const row = Array.isArray(data) ? data[0] : data;
+                const ids = row?.results?.[0]?.ids ?? '';
+                if (ids) console.log(ids);
+              } catch(e) {}
+            " || echo "")
+          fi
+
           DEPLOY_EMAIL="$CLOUDFLARE_EMAIL"
-          if [ -n "$DEPLOY_EMAIL" ]; then
+          if [ -z "$DEMO_IDS" ] && [ -n "$DEPLOY_EMAIL" ]; then
             echo "演示模式已启用，根据部署邮箱查询账户 ID: $DEPLOY_EMAIL"
             # 转义单引号，避免 email 含引号导致 SQL 语法错误
             ESC_EMAIL=$(printf '%s' "$DEPLOY_EMAIL" | sed "s/'/''/g")
@@ -329,21 +430,22 @@ runs:
                 if (ids) console.log(ids);
               } catch(e) {}
             " || echo "")
-            if [ -n "$DEMO_IDS" ]; then
-              echo "保护部署账户 IDs: $DEMO_IDS"
-              echo "$DEMO_IDS" | wrangler pages secret put DEMO_ACCOUNT_IDS --project-name "$PROJECT"
-            else
-              echo "未在 D1 中找到匹配部署邮箱的账户，跳过 DEMO_ACCOUNT_IDS 设置"
-            fi
-            echo "demo_ids=${DEMO_IDS:-\"(无匹配账户)\"}" >> $GITHUB_OUTPUT
-          else
-            echo "未获取到部署邮箱，跳过 DEMO_ACCOUNT_IDS 设置"
-            echo "demo_ids=(无邮箱)" >> $GITHUB_OUTPUT
           fi
+
+          if [ -n "$DEMO_IDS" ]; then
+            echo "保护部署账户 IDs: $DEMO_IDS"
+            echo "$DEMO_IDS" | wrangler pages secret put DEMO_ACCOUNT_IDS --project-name "$PROJECT"
+          else
+            echo "未在 D1 中找到匹配部署凭据的账户，跳过 DEMO_ACCOUNT_IDS 设置"
+          fi
+          if [ -z "$DEMO_IDS" ]; then
+            DEMO_IDS="(无匹配账户)"
+          fi
+          printf 'demo_ids=%s\n' "$DEMO_IDS" >> "$GITHUB_OUTPUT"
         else
           echo "演示模式已关闭，所有账户均可自由编辑/删除"
           echo "" | wrangler pages secret put DEMO_ACCOUNT_IDS --project-name "$PROJECT" 2>/dev/null || true
-          echo "demo_ids=(关闭)" >> $GITHUB_OUTPUT
+          printf 'demo_ids=%s\n' "(关闭)" >> "$GITHUB_OUTPUT"
         fi
 
     - name: Deploy to Cloudflare Pages
@@ -359,9 +461,14 @@ runs:
 
         # 通过 CF API 查询项目的实际 subdomain
         if [ -n "$ACCOUNT_ID" ]; then
-          PROJECT_DETAILS=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/pages/projects/${{ inputs.project_name }}" \
-            -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
-            -H "X-Auth-Key: $CLOUDFLARE_API_KEY")
+          if [ "$CF_AUTH_TYPE" = "token" ]; then
+            PROJECT_DETAILS=$(curl -sS -X GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/pages/projects/${{ inputs.project_name }}" \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
+          else
+            PROJECT_DETAILS=$(curl -sS -X GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/pages/projects/${{ inputs.project_name }}" \
+              -H "X-Auth-Email: $CLOUDFLARE_EMAIL" \
+              -H "X-Auth-Key: $CLOUDFLARE_API_KEY")
+          fi
           echo "Project API response: $PROJECT_DETAILS"
           RAW_SUBDOMAIN=$(echo "$PROJECT_DETAILS" | jq -r '.result.subdomain // empty' | tr -d '\r\n')
           echo "RAW_SUBDOMAIN=[$RAW_SUBDOMAIN]"
@@ -386,17 +493,29 @@ runs:
 
     - name: Deployment summary
       shell: bash
+      env:
+        SUMMARY_PROJECT_NAME: ${{ inputs.project_name }}
+        SUMMARY_D1_DATABASE_NAME: ${{ inputs.d1_database_name }}
+        SUMMARY_D1_DATABASE_ID: ${{ steps.d1.outputs.database_id }}
+        SUMMARY_KV_NAMESPACE_NAME: ${{ inputs.kv_namespace_name }}
+        SUMMARY_KV_NAMESPACE_ID: ${{ steps.kv.outputs.kv_namespace_id }}
+        SUMMARY_FULL_WIPE: ${{ inputs.full_wipe }}
+        SUMMARY_DEMO_MODE: ${{ inputs.demo_mode }}
+        SUMMARY_DEMO_ACCOUNT_IDS: ${{ steps.secrets.outputs.demo_ids }}
+        SUMMARY_DEPLOY_URL: ${{ steps.deploy.outputs.deploy_url }}
       run: |
-        echo "## 部署完成 ✅" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| 配置项 | 值 |" >> $GITHUB_STEP_SUMMARY
-        echo "|--------|-----|" >> $GITHUB_STEP_SUMMARY
-        echo "| CF 邮箱 | (出于安全不显示) |" >> $GITHUB_STEP_SUMMARY
-        echo "| CF API Key | **** (已隐藏) |" >> $GITHUB_STEP_SUMMARY
-        echo "| Pages 项目 | ${{ inputs.project_name }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| D1 数据库 | ${{ inputs.d1_database_name }} (${{ steps.d1.outputs.database_id }}) |" >> $GITHUB_STEP_SUMMARY
-        echo "| KV 命名空间 | ${{ inputs.kv_namespace_name }} (${{ steps.kv.outputs.kv_namespace_id }}) |" >> $GITHUB_STEP_SUMMARY
-        echo "| 完全覆盖 | ${{ inputs.full_wipe }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| 演示模式 | ${{ inputs.demo_mode }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| 演示保护账户 IDs | ${{ steps.secrets.outputs.demo_ids }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| 访问地址 | ${{ steps.deploy.outputs.deploy_url }} |" >> $GITHUB_STEP_SUMMARY
+        {
+          printf '%s\n' "## 部署完成 ✅"
+          printf '\n'
+          printf '%s\n' "| 配置项 | 值 |"
+          printf '%s\n' "|--------|-----|"
+          printf '%s\n' "| CF 邮箱 | (出于安全不显示) |"
+          printf '%s\n' "| CF API Key | **** (已隐藏) |"
+          printf '| Pages 项目 | %s |\n' "$SUMMARY_PROJECT_NAME"
+          printf '| D1 数据库 | %s (%s) |\n' "$SUMMARY_D1_DATABASE_NAME" "$SUMMARY_D1_DATABASE_ID"
+          printf '| KV 命名空间 | %s (%s) |\n' "$SUMMARY_KV_NAMESPACE_NAME" "$SUMMARY_KV_NAMESPACE_ID"
+          printf '| 完全覆盖 | %s |\n' "$SUMMARY_FULL_WIPE"
+          printf '| 演示模式 | %s |\n' "$SUMMARY_DEMO_MODE"
+          printf '| 演示保护账户 IDs | %s |\n' "$SUMMARY_DEMO_ACCOUNT_IDS"
+          printf '| 访问地址 | %s |\n' "$SUMMARY_DEPLOY_URL"
+        } >> "$GITHUB_STEP_SUMMARY"
