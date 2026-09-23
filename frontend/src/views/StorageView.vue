@@ -336,10 +336,45 @@ async function checkR2Available() {
     if (activeTab.value === 'r2') activeTab.value = 'kv';
     return;
   }
-  // 空值 = 未探测，保留默认值 true
+  // 空值 = 未探测：显式复位为 true。
+  // 若不复位，切换到「未探测」账号时 r2Available 会沿用上一个账号的值，
+  // 导致上一个账号是 '-r2'（禁用 R2）时，R2 tab 在新账号下仍然被隐藏。
+  r2Available.value = true;
+}
+
+/**
+ * 清空所有「账号级」缓存：列表、选中项、游标/前缀、查询结果。
+ *
+ * 页面按 `!xxx.value.length` 做惰性加载（见下方 watch(activeTab)），
+ * 若切换账号时保留上一个账号的列表，切回该 tab 会因列表非空而跳过重新加载，
+ * 于是既显示旧账号的记录，又会把旧账号的资源 ID 配新账号的凭据发请求
+ * （旧资源在新账号下不存在）→ 报错或返回空数据。
+ */
+function resetStorageCaches() {
+  // KV
+  kvNamespaces.value = [];
+  selectedKvNs.value = null;
+  kvKeys.value = [];
+  kvCursor.value = '';
+  // D1
+  d1Databases.value = [];
+  selectedD1Db.value = null;
+  d1Tables.value = [];
+  d1Result.value = null;
+  d1SchemaTable.value = '';
+  d1SchemaData.value = [];
+  // R2
+  r2Buckets.value = [];
+  selectedR2Bucket.value = null;
+  r2Objects.value = [];
+  r2Prefixes.value = [];
+  r2Prefix.value = '';
 }
 
 async function onAccountChange() {
+  // 先清缓存再判断 R2 可用性：checkR2Available 可能把 activeTab 从 r2 切到 kv，
+  // 因此必须在它之后再按最终 tab 触发加载。
+  resetStorageCaches();
   await checkR2Available();
   if (activeTab.value === 'kv') loadKvNamespaces();
   else if (activeTab.value === 'd1') loadD1Databases();
@@ -944,9 +979,11 @@ const r2Columns = computed<DataTableColumns<any>>(() => [
 watch(isDemoSelected, (demo) => { if (demo) d1AllowWrite.value = false; });
 watch(activeTab, (tab) => {
   if (!selectedAccount.value) return;
-  if (tab === 'kv' && !kvNamespaces.value.length) loadKvNamespaces();
-  else if (tab === 'd1' && !d1Databases.value.length) loadD1Databases();
-  else if (tab === 'r2' && !r2Buckets.value.length) loadR2Buckets();
+  // 加载中（!xxxLoading）时不再重复触发：切换账号时 checkR2Available 可能改写
+  // activeTab，onAccountChange 已主动加载一次，避免同一次切换发出两个相同请求。
+  if (tab === 'kv' && !kvNamespaces.value.length && !kvNsLoading.value) loadKvNamespaces();
+  else if (tab === 'd1' && !d1Databases.value.length && !d1DbLoading.value) loadD1Databases();
+  else if (tab === 'r2' && !r2Buckets.value.length && !r2BucketLoading.value) loadR2Buckets();
 });
 
 onMounted(async () => {

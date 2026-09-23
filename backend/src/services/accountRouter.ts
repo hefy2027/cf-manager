@@ -1,6 +1,7 @@
 import NodeCache from 'node-cache';
-import { getActiveAccounts, getActiveAccountsByFeature, Account, AccountFeature } from '../models/account';
+import { getActiveAccounts, getActiveAccountsByFeature, isPaidPlan, Account, AccountFeature } from '../models/account';
 import { getCfClient } from './cfFactory';
+import { isPaidModelName } from './aiService';
 import { getAccountQuota, ResourceType } from './quotaTracker';
 import { getQuotaTodayByResource } from '../models/quotaUsage';
 import { appLogger } from './logger';
@@ -120,7 +121,16 @@ export async function selectBestAccount(
   model?: string
 ): Promise<Account | null> {
   if (resource === 'ai_neurons') {
-    const list = getAiAccountSnapshot();
+    const snapshot = getAiAccountSnapshot();
+    // 付费模型（require_workers_paid）只允许付费计划账号承接；未标注/标为 free 的账号不可用。
+    // 付费模型名单由 getAvailableModels 刷新（缓存未建立时 isPaidModelName 返回 false，行为不变）。
+    const list = isPaidModelName(model)
+      ? snapshot.filter(r => isPaidPlan(r.account.worker_plan))
+      : snapshot;
+    if (list.length === 0) {
+      appLogger.warn(`[AccountRouter] Paid model "${model}" requested but no paid-plan account is available`);
+      return null;
+    }
     // 按实际用量 + 乐观预估量排序，避免并发选中同一账户
     list.sort((a, b) => (a.used + (a._optimistic || 0)) - (b.used + (b._optimistic || 0)));
 

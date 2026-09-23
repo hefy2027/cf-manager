@@ -1,13 +1,33 @@
 import { Hono } from 'hono';
 import type { Env } from '../types';
-import { getAllAccounts, getAccountById, getAccountByEmail, nameFromEmail, createAccount, updateAccount, deleteAccount, addAuditLog, listAccountsPaged, AccountListFilter, clearExhausted, Account } from '../db/models';
+import { getAllAccounts, getAccountById, getAccountByEmail, nameFromEmail, createAccount, updateAccount, deleteAccount, addAuditLog, listAccountsPaged, AccountListFilter, clearExhausted, Account, normalizeWorkerPlan } from '../db/models';
 import { encrypt, decrypt } from '../services/encryption';
-import { probeAvailableFeatures } from '../services/accountProbe';
+import { probeAvailableFeatures, probeWorkerPlan } from '../services/accountProbe';
 import { cfFetch } from '../services/cfApi';
 import { getQuotaSummary } from '../services/quotaTracker';
 import { isDemoAccount, isDemoMode } from '../services/demo';
 
 const app = new Hono<{ Bindings: Env }>();
+
+/**
+ * 探测账号的「可用功能」与「Workers 计划类型」并落库。
+ *
+ * - available_features：R2 等付费能力（探测不到则不写）
+ * - worker_plan：订阅列表探测（需 Account.Billing:Read）。探测失败/权限不足时保留现有值，
+ *   也就是「自动探测优先，探测不通才手工标注」——手工标注值不会被失败的探测清掉。
+ */
+async function probeAndStoreAccount(db: any, account: Account, encryptionKey: string): Promise<void> {
+  const [features, plan] = await Promise.all([
+    probeAvailableFeatures(account, encryptionKey),
+    probeWorkerPlan(account, encryptionKey),
+  ]);
+  const patch: Partial<Account> = {};
+  if (features) patch.available_features = features;
+  if (plan) patch.worker_plan = plan;
+  if (Object.keys(patch).length === 0) return;
+  await updateAccount(db, account.id, patch);
+  console.log(`[Account] Probed "${account.name}": features=${features || '(none)'}, worker_plan=${plan || '(kept)'}`);
+}
 
 app.get('/', async (c) => {
   const db = c.env.DB;
@@ -70,7 +90,7 @@ app.post('/', async (c) => {
     return c.json({ error: { code: 'CREDENTIAL_INVALID', message: `无法连接 Cloudflare API: ${e}` } }, 400);
   }
 
-  const input: any = { name, auth_type, account_id, enabled_features, proxy_url: body.proxy_url, proxy_enabled: body.proxy_enabled };
+  const input: any = { name, auth_type, account_id, enabled_features, worker_plan: normalizeWorkerPlan(body.worker_plan), proxy_url: body.proxy_url, proxy_enabled: body.proxy_enabled };
   if (auth_type === 'token') {
     input.api_token = await encrypt(api_token, c.env.ENCRYPTION_KEY);
   } else {
@@ -96,13 +116,10 @@ app.post('/', async (c) => {
     }
   }
 
-  // 探测 R2 可用性（重新获取，account_id 可能刚被更新）
+  // 探测可用功能（R2…）与计划类型（订阅列表）：计划探测需 Billing 读权限，探测不到保留现有值
   try {
     const fresh = await getAccountById(db, id);
-    if (fresh) {
-      const features = await probeAvailableFeatures(fresh, c.env.ENCRYPTION_KEY);
-      if (features) await updateAccount(db, id, { available_features: features });
-    }
+    if (fresh) await probeAndStoreAccount(db, fresh, c.env.ENCRYPTION_KEY);
   } catch (e) {
     console.warn(`[Account] Failed to probe features for "${name}": ${e}`);
   }
@@ -122,7 +139,7 @@ app.put('/:id', async (c) => {
   const existing = await getAccountById(db, id);
   if (!existing) return c.json({ error: { code: 'NOT_FOUND', message: 'Account not found' } }, 404);
 
-  const { name, auth_type, api_token, api_key, email, proxy_url, proxy_enabled } = await c.req.json();
+  const { name, auth_type, api_token, api_key, email, proxy_url, proxy_enabled, worker_plan } = await c.req.json();
   if (!name || !auth_type) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'name and auth_type are required' } }, 400);
   if (auth_type !== 'token' && auth_type !== 'global_key') return c.json({ error: { code: 'VALIDATION_ERROR', message: 'auth_type must be "token" or "global_key"' } }, 400);
 
@@ -135,6 +152,11 @@ app.put('/:id', async (c) => {
   }
   if (proxy_enabled !== undefined) {
     input.proxy_enabled = proxy_enabled;
+  }
+
+  // 计划类型（free / paid / enterprise）由人工标注，随时可改；缺省/非法值落回 free
+  if (worker_plan !== undefined) {
+    input.worker_plan = normalizeWorkerPlan(worker_plan);
   }
   const CF_BASE = 'https://api.cloudflare.com/client/v4';
 
@@ -200,15 +222,11 @@ app.put('/:id', async (c) => {
 
   await addAuditLog(db, { account_id: id, action: 'update_account', target: name, detail: `auth_type=${auth_type}`, status: 'success' });
 
-  // 若提供了新凭证，探测 R2（重新获取，account_id 可能刚被更新）
+  // 若提供了新凭证，探测可用功能（R2…）与计划类型，失败不阻断
   if (input.api_token || input.api_key) {
     try {
       const probed = await getAccountById(db, id);
-      if (probed) {
-        const features = await probeAvailableFeatures(probed, encryptionKey);
-        await updateAccount(db, id, { available_features: features });
-        console.log(`[Account] Probed features for "${name}": ${features}`);
-      }
+      if (probed) await probeAndStoreAccount(db, probed, encryptionKey);
     } catch (e) {
       console.warn(`[Account] Failed to probe features for "${name}": ${e}`);
     }
@@ -269,13 +287,10 @@ app.post('/:id/test', async (c) => {
 
   await updateAccount(db, id, { is_active: 1 });
 
-  // 探测 R2 可用性（重新获取，account_id 可能刚被更新）
+  // 探测可用功能（R2…）与计划类型（订阅列表）：计划探测需 Billing 读权限，探测不到保留现有值
   try {
     const fresh = await getAccountById(db, id);
-    if (fresh) {
-      const features = await probeAvailableFeatures(fresh, c.env.ENCRYPTION_KEY);
-      if (features) await updateAccount(db, id, { available_features: features });
-    }
+    if (fresh) await probeAndStoreAccount(db, fresh, c.env.ENCRYPTION_KEY);
   } catch (e) {
     console.warn(`[Account] Failed to probe features for account ${id}: ${e}`);
   }
@@ -377,13 +392,10 @@ app.post('/test-batch', async (c) => {
       }
       await updateAccount(db, account.id, { is_active: 1 });
 
-      // 探测 R2 可用性（重新获取，account_id 可能刚被更新）
+      // 探测可用功能（R2…）与计划类型：计划探测需 Billing 读权限，探测不到保留现有值
       try {
         const fresh = await getAccountById(db, account.id);
-        if (fresh) {
-          const features = await probeAvailableFeatures(fresh, encryptionKey);
-          if (features) await updateAccount(db, account.id, { available_features: features });
-        }
+        if (fresh) await probeAndStoreAccount(db, fresh, encryptionKey);
       } catch (e) {
         console.warn(`[Account:TestBatch] Failed to probe features for "${account.name}": ${e}`);
       }

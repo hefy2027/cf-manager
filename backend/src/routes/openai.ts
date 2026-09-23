@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { Readable } from 'stream';
 import { selectBestAccount } from '../services/accountRouter';
-import { getActiveAccountsByFeature } from '../models/account';
+import { getActiveAccountsByFeature, hasPaidAccountByFeature } from '../models/account';
 import { getAvailableModels, getModelInputSchema, extractTtsAdvancedParams, buildTtsCfBody, modelRequiresWorkersPaid } from '../services/aiService';
 import { getAuthHeaders } from '../services/cfFactory';
 import { createAuditLog } from '../models/auditLog';
@@ -124,7 +124,13 @@ router.get('/models', async (req: Request, res: Response, next: NextFunction) =>
       return;
     }
     const taskFilter = req.query.task as string | undefined;
-    const models = await getAvailableModels(account, taskFilter);
+    let models = await getAvailableModels(account, taskFilter);
+
+    // 无付费计划（paid/enterprise）活跃账号时隐藏付费模型：这类模型调用必然失败，留在列表里只会误导。
+    // 由用户在「账号管理」中标注计划类型（不标即视为 free）。
+    if (!hasPaidAccountByFeature('ai')) {
+      models = models.filter((m: any) => !modelRequiresWorkersPaid(m));
+    }
 
     // TTS 模型：一次性获取模型 schema，下发 speaker 枚举与高级可选参数
     const ttsModelMeta: Record<string, { speakers?: string[]; default_speaker?: string; advanced_params?: Record<string, any> }> = {};

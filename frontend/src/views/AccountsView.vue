@@ -86,6 +86,10 @@
             </n-space>
           </n-checkbox-group>
         </n-form-item>
+        <n-form-item :label="t('accounts.workerPlan')">
+          <n-select v-model:value="form.worker_plan" :options="workerPlanOptions" style="width: 180px" />
+          <n-text depth="3" style="margin-left: 8px; font-size: 12px">{{ t('accounts.workerPlanHint') }}</n-text>
+        </n-form-item>
       </n-form>
       <template #action>
         <n-button @click="showAddModal = false">{{ t('common.cancel') }}</n-button>
@@ -509,6 +513,7 @@ const form = ref({
   api_key: '',
   email: '',
   features: ['ai', 'workers', 'browser_render', 'dns', 'storage'] as string[],
+  worker_plan: 'free',
 });
 
 const authTypeOptions = computed(() => [
@@ -516,8 +521,15 @@ const authTypeOptions = computed(() => [
   { label: t('accounts.authTypeKey'), value: 'global_key' },
 ]);
 
+// 账号的 Cloudflare Workers 计划类型：付费模型只路由到 paid/enterprise 账号（不标即视为免费）
+const workerPlanOptions = computed(() => [
+  { label: t('accounts.planFree'), value: 'free' },
+  { label: t('accounts.planPaid'), value: 'paid' },
+  { label: t('accounts.planEnterprise'), value: 'enterprise' },
+]);
+
 function resetForm() {
-  form.value = { name: '', auth_type: 'token', api_token: '', api_key: '', email: '', features: ['ai', 'workers', 'browser_render', 'dns', 'storage'] };
+  form.value = { name: '', auth_type: 'token', api_token: '', api_key: '', email: '', features: ['ai', 'workers', 'browser_render', 'dns', 'storage'], worker_plan: 'free' };
 }
 
 async function handleSubmit() {
@@ -528,7 +540,7 @@ async function handleSubmit() {
   submitting.value = true;
   try {
     const { features, ...rest } = form.value;
-    const payload: any = { name: rest.name, auth_type: rest.auth_type };
+    const payload: any = { name: rest.name, auth_type: rest.auth_type, worker_plan: rest.worker_plan };
     // 仅发送用户实际填写的凭证字段；空串一律剔除，避免覆盖原凭证
     if (rest.auth_type === 'token') {
       if (rest.api_token) payload.api_token = rest.api_token;
@@ -562,6 +574,7 @@ function openAccountEditor(row: any) {
     api_key: '',
     email: '',
     features: parseFeatures(row.enabled_features),
+    worker_plan: row.worker_plan || 'free',
   };
   showAddModal.value = true;
 }
@@ -874,6 +887,12 @@ const columns = computed<DataTableColumns<any>>(() => {
   { title: t('accounts.table.name'), key: 'name', width: 150 },
   { title: 'Account ID', key: 'account_id', width: 180, ellipsis: { tooltip: true }, render: (row) => row.account_id || '-' },
   { title: t('accounts.table.authType'), key: 'auth_type', width: 120, render: (row) => h(NTag, { size: 'small', type: row.auth_type === 'token' ? 'info' : 'warning' }, { default: () => row.auth_type === 'token' ? 'Token' : 'Key' }) },
+  { title: t('accounts.workerPlan'), key: 'worker_plan', width: 90, render: (row) => {
+    // 未标注（空）与 'free' 都按免费处理；付费模型只会路由到「付费/企业」账号
+    const plan = row.worker_plan === 'paid' || row.worker_plan === 'enterprise' ? row.worker_plan : 'free';
+    const labelKey = plan === 'paid' ? 'accounts.planPaid' : plan === 'enterprise' ? 'accounts.planEnterprise' : 'accounts.planFree';
+    return h(NTag, { size: 'small', type: plan === 'free' ? 'default' : 'success', bordered: false }, { default: () => t(labelKey) });
+  }},
   ];
   // Worker 平台不支持代理，隐藏代理列
   if (!isWorkerPlatform.value) {

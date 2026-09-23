@@ -66,8 +66,9 @@
                   <n-space align="center">
                     <n-tag type="info" size="large">{{ builtCron }}</n-tag>
                     <n-text v-if="cronDesc" depth="3" style="font-size: 12px">{{ cronDesc }}</n-text>
-                    <n-button size="small" type="primary" @click="addCronToList" :disabled="cronExpressions.includes(builtCron)">{{ t('workerSettings.addToList') }}</n-button>
+                    <n-button size="small" type="primary" @click="addCronToList" :disabled="!isBuiltCronValid || cronExpressions.includes(builtCron)">{{ t('workerSettings.addToList') }}</n-button>
                   </n-space>
+                  <n-text v-if="!isBuiltCronValid" type="error" style="font-size: 12px">{{ t('workerSettings.cronInvalid') }}</n-text>
                 </n-space>
               </n-card>
 
@@ -321,6 +322,7 @@ import { workersApi } from '../api/workers';
 import { useWorkerStore } from '../stores/workerStore';
 import { formatCN } from '../utils/dateFormat';
 import { isDemoAccount } from '../utils/demoAccounts';
+import { isValidCronExpression, normalizeCronExpression } from '../utils/cronValidation';
 
 const { t } = useI18n();
 
@@ -370,7 +372,7 @@ const cronPresets = computed(() => [
   { label: t('workerSettings.cronPresets.everyHour'), value: '0 * * * *' },
   { label: t('workerSettings.cronPresets.every2Hour'), value: '0 */2 * * *' },
   { label: t('workerSettings.cronPresets.daily0'), value: '0 0 * * *' },
-  { label: t('workerSettings.cronPresets.weekly0'), value: '0 0 * * 0' },
+  { label: t('workerSettings.cronPresets.weekly0'), value: '0 0 * * SUN' },
   { label: t('workerSettings.cronPresets.monthly1'), value: '0 0 1 * *' },
 ]);
 const cronPreset = ref('');
@@ -381,7 +383,8 @@ const cronDay = ref('*');
 const cronMon = ref('*');
 const cronDow = ref('*');
 const isMobileCron = ref(window.innerWidth <= 768);
-const builtCron = computed(() => `${cronMin.value} ${cronHour.value} ${cronDay.value} ${cronMon.value} ${cronDow.value}`);
+const builtCron = computed(() => normalizeCronExpression(`${cronMin.value} ${cronHour.value} ${cronDay.value} ${cronMon.value} ${cronDow.value}`));
+const isBuiltCronValid = computed(() => isValidCronExpression(builtCron.value));
 
 function describeCron(cron: string): string {
   if (!cron) return '';
@@ -414,6 +417,10 @@ function onCronFieldChange() {
 
 function addCronToList() {
   const expr = builtCron.value;
+  if (!isValidCronExpression(expr)) {
+    message.warning(t('workerSettings.cronInvalid'));
+    return;
+  }
   if (!cronExpressions.value.includes(expr)) {
     cronExpressions.value.push(expr);
   }
@@ -592,11 +599,19 @@ async function loadSchedules() {
 }
 
 async function saveSchedules() {
+  const normalized = cronExpressions.value.map(normalizeCronExpression);
+  if (!normalized.every(isValidCronExpression)) {
+    message.warning(t('workerSettings.cronInvalid'));
+    return;
+  }
+  cronExpressions.value = [...new Set(normalized)];
   schedulesSaving.value = true;
   try {
     await workersApi.updateSchedules(accountId.value, workerName.value, cronExpressions.value);
     message.success(t('workerSettings.msg.schedulesSaved'));
     loadSchedules();
+  } catch (e: any) {
+    message.error(e?.errorMessage || e?.message || t('workerSettings.msg.saveFailed'));
   } finally { schedulesSaving.value = false; }
 }
 

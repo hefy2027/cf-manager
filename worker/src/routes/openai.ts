@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import type { Env } from '../types';
-import { setExhausted, incrementQuota, addAuditLog, getActiveAccountsByFeature } from '../db/models';
+import { setExhausted, incrementQuota, addAuditLog, getActiveAccountsByFeature, hasPaidAccountByFeature } from '../db/models';
 import { getAuthHeaders, cfFetchRaw } from '../services/cfApi';
-import { getModelInputSchema, extractTtsAdvancedParams, buildTtsCfBody, modelRequiresWorkersPaid } from '../services/aiService';
+import { getModelInputSchema, extractTtsAdvancedParams, buildTtsCfBody, modelRequiresWorkersPaid, cachePaidModelNames } from '../services/aiService';
 import { selectBestAccount, invalidateAiCache, clearOptimistic } from '../services/quotaTracker';
 import { estimateNeurons, estimateImageNeurons, estimateTtsNeurons, estimateTranslationNeurons, estimateEmbeddingsNeurons, estimateAsrNeurons } from '../services/pricing';
 import { getRequestId } from '../middleware/requestId';
@@ -203,6 +203,15 @@ app.get('/models', async (c) => {
   const json = await resp.json() as any;
 
   let models = (json.result || []);
+
+  // 刷新付费模型名缓存（账号路由层据此把付费模型限制在付费账号上）
+  cachePaidModelNames(models);
+
+  // 无付费计划（paid/enterprise）活跃账号时隐藏付费模型：调用必然失败，留在列表里只会误导。
+  // 由用户在「账号管理」中标注计划类型（不标即视为 free）。
+  if (!(await hasPaidAccountByFeature(c.env.DB, 'ai'))) {
+    models = models.filter((m: any) => !modelRequiresWorkersPaid(m));
+  }
 
   // Filter by task if specified (normalize both to handle "text-generation" vs "Text Generation")
   if (taskFilter) {

@@ -11,8 +11,25 @@ export interface Account {
   created_at: string;
   updated_at: string;
   available_features: string;
+  worker_plan: string;
   proxy_url: string;
   proxy_enabled: number;
+}
+
+/** 账号的 Cloudflare Workers 计划类型；未标注（空串）视为免费。 */
+export type WorkerPlan = 'free' | 'paid' | 'enterprise';
+
+/**
+ * 账号是否属于付费计划（可承接 require_workers_paid 的付费模型）。
+ * 未标注（'' / undefined）与 'free' 一律按免费处理 —— 「不标就是免费」。
+ */
+export function isPaidPlan(plan: string | null | undefined): boolean {
+  return plan === 'paid' || plan === 'enterprise';
+}
+
+/** 规范化用户传入的计划值，非法值一律落回 'free'。 */
+export function normalizeWorkerPlan(plan: unknown): WorkerPlan {
+  return plan === 'paid' || plan === 'enterprise' ? plan : 'free';
 }
 
 export type AccountFeature = 'ai' | 'workers' | 'browser_render' | 'dns' | 'storage';
@@ -52,6 +69,15 @@ export async function getActiveAccounts(db: D1Database): Promise<Account[]> {
 export async function getActiveAccountsByFeature(db: D1Database, feature: AccountFeature): Promise<Account[]> {
   const all = await getActiveAccounts(db);
   return all.filter(a => hasFeature(a, feature));
+}
+
+/**
+ * 该能力下是否存在付费计划（paid / enterprise）活跃账号。
+ * 用于决定付费模型（require_workers_paid）是否可以路由、以及要不要在模型列表里隐藏它们。
+ */
+export async function hasPaidAccountByFeature(db: D1Database, feature: AccountFeature): Promise<boolean> {
+  const accounts = await getActiveAccountsByFeature(db, feature);
+  return accounts.some(a => isPaidPlan(a.worker_plan));
 }
 
 export async function getAllAccounts(db: D1Database): Promise<Account[]> {
@@ -125,12 +151,13 @@ export async function getAccountById(db: D1Database, id: number): Promise<Accoun
 
 export async function createAccount(db: D1Database, data: {
   name: string; auth_type: string; api_token?: string; api_key?: string;
-  email?: string; account_id?: string; enabled_features?: string; proxy_url?: string; proxy_enabled?: number;
+  email?: string; account_id?: string; enabled_features?: string; worker_plan?: string; proxy_url?: string; proxy_enabled?: number;
 }): Promise<number> {
   const res = await db.prepare(
-    'INSERT INTO accounts (name, auth_type, api_token, api_key, email, account_id, enabled_features, proxy_url, proxy_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO accounts (name, auth_type, api_token, api_key, email, account_id, enabled_features, worker_plan, proxy_url, proxy_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).bind(data.name, data.auth_type, data.api_token || null, data.api_key || null,
     data.email || null, data.account_id || null, data.enabled_features || 'ai,workers,browser_render,dns,storage',
+    normalizeWorkerPlan(data.worker_plan),
     data.proxy_url || '', data.proxy_enabled ?? 0).run();
   return res.meta.last_row_id;
 }

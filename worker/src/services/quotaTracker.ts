@@ -1,8 +1,9 @@
-import { getActiveAccounts, getActiveAccountsByFeature, hasFeature, getAllQuotaToday, setQuota, incrementQuota, getQuotaByAccount, getQuotaTodayByResource, addOptimisticD1, clearOptimisticD1, getOptimisticMapD1, getSetting, setSetting, type Account, type AccountFeature } from '../db/models';
+import { getActiveAccounts, getActiveAccountsByFeature, hasFeature, isPaidPlan, getAllQuotaToday, setQuota, incrementQuota, getQuotaByAccount, getQuotaTodayByResource, addOptimisticD1, clearOptimisticD1, getOptimisticMapD1, getSetting, setSetting, type Account, type AccountFeature } from '../db/models';
 import type { Env } from '../types';
 import { cfGraphQL } from './cfApi';
 import { logger } from './logger';
 import { mapConcurrent } from '../utils/concurrent';
+import { isPaidModelName } from './aiService';
 import pricingData from '../data/model-pricing.json';
 
 export type ResourceType = 'workers_requests' | 'ai_neurons' | 'browser_render_seconds';
@@ -230,6 +231,16 @@ export async function selectBestAccount(
     }
 
     if (!snapshot || snapshot.length === 0) return null;
+
+    // 付费模型（require_workers_paid）只允许付费计划账号承接；未标注/标为 free 的账号不可用。
+    // 付费模型名单由 /models 刷新（缓存未建立时 isPaidModelName 返回 false，行为不变）。
+    if (isPaidModelName(model)) {
+      snapshot = snapshot.filter(r => isPaidPlan(r._account?.worker_plan));
+      if (snapshot.length === 0) {
+        console.log(`[AI] Paid model "${model}" requested but no paid-plan account is available`);
+        return null;
+      }
+    }
 
     // 读取乐观预估量 (KV 或 D1)
     const optimistic = await readOptimistic(env);

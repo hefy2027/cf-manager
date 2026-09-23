@@ -1,6 +1,8 @@
 import type { Account } from '../db/models';
 import { cfFetch, cfFetchRaw } from './cfApi';
+import { ensureAccountSubdomain } from './workerSubdomain';
 import { computeStaticAssetHash, extractZipFiles, uint8ToBase64, getContentType } from './staticAssets';
+import { logger } from './logger';
 
 // 递归展开 error.cause 链，拼出完整原因。fetch 失败时顶层 message 常为 "fetch failed"，
 // 真正原因（ECONNRESET / ETIMEDOUT / ENOTFOUND / certificate ...）藏在 err.cause 里。
@@ -217,6 +219,15 @@ export async function deployWorker(
     const respJson = await resp.json() as any;
     versionId = respJson?.result?.version_id || respJson?.result?.version?.id;
   } catch { /* 响应非 JSON，跳过 */ }
+
+  // 账号级 workers.dev 子域名：账号没注册过就自动注册（全局唯一，撞名会自动回退随机后缀）。
+  // 必须在脚本级子域开关之前完成，否则新账号上脚本级开关必然失败。
+  try {
+    const ensured = await ensureAccountSubdomain(account, encryptionKey);
+    if (ensured.error) {
+      logger.warn('WorkerDeploy', `workers.dev subdomain unavailable for "${account.name}": ${ensured.error}`);
+    }
+  } catch (_) { /* soft fail，不阻断部署 */ }
 
   // 启用 workers.dev 子域，使 Worker 立即可访问（与 backend deployWorker 行为一致）
   try {

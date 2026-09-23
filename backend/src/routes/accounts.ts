@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import Cloudflare from 'cloudflare';
 import { getAllAccounts, createAccount, deleteAccount, getAccountById, getAccountByEmail, nameFromEmail, updateAccountStatus, updateAccountId, updateAccountFeatures, updateAccount, AccountInput } from '../models/account';
-import { listAccountsPaged, AccountListFilter, Account } from '../models/account';
+import { listAccountsPaged, AccountListFilter, Account, normalizeWorkerPlan } from '../models/account';
 import { encrypt } from '../services/encryptionService';
 import { decrypt } from '../services/encryptionService';
 import { getCfClient } from '../services/cfFactory';
@@ -13,9 +13,29 @@ import { createAuditLog } from '../models/auditLog';
 import { getHttpAgent } from '../services/proxyService';
 import { clearExhausted } from '../models/quotaUsage';
 import { isDemoAccountId, isDemoMode } from './routeUtils';
-import { probeAvailableFeatures } from '../services/accountProbe';
+import { probeAvailableFeatures, probeWorkerPlan } from '../services/accountProbe';
 
 const router = Router();
+
+/**
+ * 探测账号的「可用功能」与「Workers 计划类型」并落库。
+ *
+ * - available_features：R2 等付费能力（探测不到则不写）
+ * - worker_plan：订阅列表探测（需 Account.Billing:Read）。探测失败/权限不足时保留现有值，
+ *   也就是「自动探测优先，探测不通才手工标注」——手工标注值不会被失败的探测清掉。
+ */
+async function probeAndStoreAccount(account: Account): Promise<void> {
+  const [features, plan] = await Promise.all([
+    probeAvailableFeatures(account),
+    probeWorkerPlan(account),
+  ]);
+  const patch: Partial<AccountInput> = {};
+  if (features) patch.available_features = features;
+  if (plan) patch.worker_plan = plan;
+  if (Object.keys(patch).length === 0) return;
+  updateAccount(account.id, patch);
+  appLogger.info(`[Account] Probed "${account.name}": features=${features || '(none)'}, worker_plan=${plan || '(kept)'}`);
+}
 
 const uploadCsv = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -91,7 +111,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       return;
     }
 
-    const input: AccountInput = { name, auth_type, account_id, enabled_features: req.body.enabled_features, proxy_url: req.body.proxy_url, proxy_enabled: req.body.proxy_enabled };
+    const input: AccountInput = { name, auth_type, account_id, enabled_features: req.body.enabled_features, worker_plan: normalizeWorkerPlan(req.body.worker_plan), proxy_url: req.body.proxy_url, proxy_enabled: req.body.proxy_enabled };
     if (auth_type === 'token') {
       input.api_token = encrypt(api_token);
     } else {
@@ -120,13 +140,10 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       }
     }
 
-    // 探测 R2 可用性（重新获取，account_id 可能刚被更新）
+    // 探测可用功能（R2…）与计划类型（订阅列表）：计划探测需 Billing 读权限，探测不到保留现有值
     try {
       const fresh = getAccountById(id);
-      if (fresh) {
-        const features = await probeAvailableFeatures(fresh);
-        if (features) updateAccount(id, { available_features: features });
-      }
+      if (fresh) await probeAndStoreAccount(fresh);
     } catch (e) {
       appLogger.warn(`[Account] Failed to probe features for "${name}": ${e}`);
     }
@@ -166,6 +183,11 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
     }
     if (req.body.proxy_enabled !== undefined) {
       input.proxy_enabled = req.body.proxy_enabled;
+    }
+
+    // 计划类型（free / paid / enterprise）由人工标注，随时可改；缺省/非法值落回 free
+    if (req.body.worker_plan !== undefined) {
+      input.worker_plan = normalizeWorkerPlan(req.body.worker_plan);
     }
 
     if (auth_type === 'token') {
@@ -232,15 +254,11 @@ router.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
     clearCache();
     createAuditLog(id, 'update_account', name, `auth_type=${auth_type}`, 'success');
 
-    // 若提供了新凭证，探测可用付费功能（R2...），失败不阻断
+    // 若提供了新凭证，探测可用付费功能（R2…）与计划类型，失败不阻断
     if (input.api_token || input.api_key) {
       try {
         const probed = getAccountById(id);
-        if (probed) {
-          const features = await probeAvailableFeatures(probed);
-          updateAccount(id, { available_features: features });
-          appLogger.info(`[Account] Probed features for "${name}": ${features}`);
-        }
+        if (probed) await probeAndStoreAccount(probed);
       } catch (e) {
         appLogger.warn(`[Account] Failed to probe features for "${name}": ${e}`);
       }
@@ -348,13 +366,10 @@ router.post('/:id/test', async (req: Request, res: Response, next: NextFunction)
     // 测试成功，更新状态为活跃
     updateAccountStatus(accountId, true);
 
-    // 探测 R2 可用性（重新获取，account_id 可能刚被更新）
+    // 探测可用功能（R2…）与计划类型（订阅列表）：计划探测需 Billing 读权限，探测不到保留现有值
     try {
       const fresh = getAccountById(accountId);
-      if (fresh) {
-        const features = await probeAvailableFeatures(fresh);
-        if (features) updateAccount(accountId, { available_features: features });
-      }
+      if (fresh) await probeAndStoreAccount(fresh);
     } catch (e) {
       appLogger.warn(`[Account] Failed to probe features for account ${accountId}: ${e}`);
     }
@@ -422,13 +437,10 @@ router.post('/test-batch', async (req: Request, res: Response, next: NextFunctio
         }
         updateAccountStatus(account.id, true);
 
-        // 探测 R2 可用性（重新获取，account_id 可能刚被更新）
+        // 探测可用功能（R2…）与计划类型：计划探测需 Billing 读权限，探测不到保留现有值
         try {
           const fresh = getAccountById(account.id);
-          if (fresh) {
-            const features = await probeAvailableFeatures(fresh);
-            if (features) updateAccount(account.id, { available_features: features });
-          }
+          if (fresh) await probeAndStoreAccount(fresh);
         } catch (e) {
           appLogger.warn(`[Account:TestBatch] Failed to probe features for "${account.name}": ${e}`);
         }

@@ -4,6 +4,7 @@ import { getAccountById, getActiveAccountsByFeature, addAuditLog } from '../db/m
 import { cfFetch, cfFetchRaw, cfFetchAll } from '../services/cfApi';
 import { getWorkersUsageToday } from '../services/quotaTracker';
 import { mapConcurrent } from '../utils/concurrent';
+import { normalizeCronExpressions } from '../utils/cronValidation';
 import { demoDestructiveGuard } from '../services/demo';
 import { deployPages } from '../services/deploy/pagesDeploy';
 import { extractZipFiles, validatePagesProjectName } from '../services/pagesDeploy';
@@ -108,10 +109,11 @@ app.get('/:accountId/workers/:name/schedules', async (c) => {
 
 app.put('/:accountId/workers/:name/schedules', async (c) => {
   const account = await requireAccount(c);
-  const body = await c.req.json();
-  if (!Array.isArray(body.crons)) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'crons must be an array' } }, 400);
+  const body = await c.req.json().catch(() => ({}));
+  const crons = normalizeCronExpressions(body.crons);
+  if (!crons) return c.json({ error: { code: 'VALIDATION_ERROR', message: 'crons must be an array of valid five-field cron expressions' } }, 400);
   const result = await cfFetch(account, `/accounts/${account.account_id}/workers/scripts/${c.req.param('name')}/schedules`, c.env.ENCRYPTION_KEY, {
-    method: 'PUT', body: JSON.stringify(body.crons.map((cron: string) => ({ cron }))),
+    method: 'PUT', body: JSON.stringify(crons.map(cron => ({ cron }))),
   });
   return c.json(result);
 });

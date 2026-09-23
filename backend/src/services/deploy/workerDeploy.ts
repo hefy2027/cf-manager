@@ -2,6 +2,7 @@ import { Account } from '../../models/account';
 import { getDeployHeaders } from './headers';
 import { createWorkerUploadForm } from './uploadForm';
 import { deployWorkerAssets } from './assetsUpload';
+import { ensureAccountSubdomain } from '../workerSubdomain';
 import type { CfWorkerInit } from './types';
 import { appLogger } from '../logger';
 import { proxyFetch } from '../proxyService';
@@ -258,17 +259,13 @@ export async function deployWorker(
     } catch {
       // Soft fail
     }
-    // Get account-level subdomain
-    try {
-      const subResp = await proxyFetch(`${CF_BASE}/accounts/${accountId}/workers/subdomain`, {
-        headers: { 'Content-Type': 'application/json', ...deployHeaders },
-      }, 30000, undefined, account);
-      if (subResp.ok) {
-        const subJson = await subResp.json() as any;
-        subdomain = subJson?.result?.subdomain;
-      }
-    } catch {
-      // Soft fail
+    // 账号级 workers.dev 子域名：账号没注册过就自动注册（全局唯一，撞名会自动回退随机后缀）。
+    // 失败不阻断部署，但必须记日志 —— 否则用户会碰到"部署成功但 *.workers.dev 打不开"。
+    const ensured = await ensureAccountSubdomain(account);
+    if (ensured.subdomain) {
+      subdomain = ensured.subdomain;
+    } else if (ensured.error) {
+      appLogger.warn(`[Worker Deploy] workers.dev subdomain unavailable for "${account.name}": ${ensured.error}`);
     }
   }
 
