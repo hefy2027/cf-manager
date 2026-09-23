@@ -17,6 +17,7 @@ export interface Account {
   created_at: string;
   updated_at: string;
   available_features: string;
+  worker_plan: string;
   proxy_url: string;
   proxy_enabled: number;
 }
@@ -30,8 +31,27 @@ export interface AccountInput {
   account_id?: string;
   enabled_features?: string;
   available_features?: string;
+  worker_plan?: string;
   proxy_url?: string;
   proxy_enabled?: number;
+}
+
+/** 账号的 Cloudflare Workers 计划类型；未标注（空串）视为免费。 */
+export type WorkerPlan = 'free' | 'paid' | 'enterprise';
+
+export const WORKER_PLANS: WorkerPlan[] = ['free', 'paid', 'enterprise'];
+
+/**
+ * 账号是否属于付费计划（可承接 require_workers_paid 的付费模型）。
+ * 未标注（'' / undefined）与 'free' 一律按免费处理 —— 「不标就是免费」。
+ */
+export function isPaidPlan(plan: string | null | undefined): boolean {
+  return plan === 'paid' || plan === 'enterprise';
+}
+
+/** 规范化用户传入的计划值，非法值一律落回 'free'。 */
+export function normalizeWorkerPlan(plan: unknown): WorkerPlan {
+  return plan === 'paid' || plan === 'enterprise' ? plan : 'free';
 }
 
 export function hasFeature(account: Account, feature: AccountFeature): boolean {
@@ -41,6 +61,14 @@ export function hasFeature(account: Account, feature: AccountFeature): boolean {
 
 export function getActiveAccountsByFeature(feature: AccountFeature): Account[] {
   return getActiveAccounts().filter(a => hasFeature(a, feature));
+}
+
+/**
+ * 该能力下是否存在付费计划（paid / enterprise）活跃账号。
+ * 用于决定付费模型（require_workers_paid）是否可以路由、以及要不要在模型列表里隐藏它们。
+ */
+export function hasPaidAccountByFeature(feature: AccountFeature): boolean {
+  return getActiveAccountsByFeature(feature).some(a => isPaidPlan(a.worker_plan));
 }
 
 export function getAllAccounts(): Account[] {
@@ -109,7 +137,7 @@ export function getAccountById(id: number): Account | undefined {
 export function createAccount(input: AccountInput): number {
   const features = input.enabled_features || ALL_FEATURES.join(',');
   const stmt = getDb().prepare(
-    'INSERT INTO accounts (name, auth_type, api_token, api_key, email, account_id, enabled_features, proxy_url, proxy_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO accounts (name, auth_type, api_token, api_key, email, account_id, enabled_features, worker_plan, proxy_url, proxy_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   const result = stmt.run(
     input.name,
@@ -119,6 +147,7 @@ export function createAccount(input: AccountInput): number {
     input.email || null,
     input.account_id || null,
     features,
+    normalizeWorkerPlan(input.worker_plan),
     input.proxy_url || '',
     input.proxy_enabled ?? 0
   );
@@ -136,6 +165,7 @@ export function updateAccount(id: number, input: Partial<AccountInput>): void {
     email: 'email',
     account_id: 'account_id',
     available_features: 'available_features',
+    worker_plan: 'worker_plan',
     proxy_url: 'proxy_url',
     proxy_enabled: 'proxy_enabled',
   };

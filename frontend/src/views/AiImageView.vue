@@ -329,10 +329,18 @@ function switchMode(m: Mode) {
 async function fetchAccounts() {
   try {
     const { data } = await accountsApi.getAll();
-    const accounts = (data.accounts || []).filter((a: any) => a.is_active && (a.enabled_features || '').includes('ai')).map((a: any) => ({
-      label: a.name,
-      value: a.account_id || String(a.id),
-    }));
+    const seen = new Set<string>();
+    const accounts = (data.accounts || [])
+      .filter((a: any) => a.is_active && (a.enabled_features || '').includes('ai'))
+      .map((a: any) => ({
+        label: a.name,
+        value: a.account_id || String(a.id),
+      }))
+      .filter((opt: { value: string }) => {
+        if (!opt.value || seen.has(opt.value)) return false;
+        seen.add(opt.value);
+        return true;
+      });
     accountOptions.value = [
       { label: '🤖 ' + t('ai.autoAssign'), value: 'auto' },
       ...accounts,

@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   is_active       INTEGER DEFAULT 1,
   enabled_features TEXT DEFAULT 'ai,workers,browser_render,dns,storage',
   available_features TEXT DEFAULT '',
+  worker_plan     TEXT DEFAULT 'free',
   proxy_url       TEXT DEFAULT '',
   proxy_enabled   INTEGER DEFAULT 0,
   created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,

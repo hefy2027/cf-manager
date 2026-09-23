@@ -11,23 +11,27 @@ export async function deployTriggers(
   account: Account,
   encryptionKey: string,
   scriptName: string,
-  crons: string[],
+  crons: string[] | undefined,
   routes: string[],
 ): Promise<{ warnings: string[] }> {
   const warnings: string[] = [];
   const accountId = account.account_id;
   const deployHeaders = await getDeployHeaders(account, encryptionKey);
 
-  // 1. Cron Schedules
-  if (crons && crons.length > 0) {
+  // 1. Cron Schedules。只有模板显式提供 crons 时才替换列表；空数组
+  // 用于清理旧触发器，undefined 表示保留现状。
+  if (crons !== undefined) {
     try {
       const resp = await fetch(`${CF_BASE}/accounts/${accountId}/workers/scripts/${scriptName}/schedules`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', ...deployHeaders },
         body: JSON.stringify(crons.map(c => ({ cron: c }))),
       });
-      if (!resp.ok) {
-        const body = await resp.text();
+      const body = await resp.text();
+      let payload: any = null;
+      try { payload = body ? JSON.parse(body) : null; } catch { /* HTTP success may have an empty body. */ }
+      const apiFailed = payload?.success === false || (Array.isArray(payload?.errors) && payload.errors.length > 0);
+      if (!resp.ok || apiFailed) {
         warnings.push(`定时任务注册失败: ${resp.status} ${body.slice(0, 200)}`);
       } else {
         console.log(`[Triggers] Cron triggers set for ${scriptName}: ${crons.join(', ')}`);

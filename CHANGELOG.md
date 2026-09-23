@@ -1,5 +1,30 @@
 # Changelog
 
+## [2.3.0] - 2026-09-23
+
+### ✨ 新功能
+
+- **多账户 Workers 计划（worker_plan）标记与付费 AI 模型智能路由（双端对称）**：
+  - **数据库**：`accounts` 表新增 `worker_plan TEXT DEFAULT 'free'` 列，backend（SQLite 迁移 `0009_accounts_worker_plan`）与 worker（D1 迁移 `0010_accounts_worker_plan.sql` + `schema.sql`）严格对齐并经 `schema-check` 验证。
+  - **计划探测与子域名分配**：`accountProbe` 支持探测账户的 Cloudflare Workers 计划类型；两端新增 `workerSubdomain.ts` 支持按需查询与预先分配 workers 子域名及计划类型。
+  - **智能路由**：AI 推理与 OpenAI 兼容路由对付费定价模型（`isPaidPricing`）自动仅路由至 `worker_plan` 为 `paid` 或 `enterprise` 的账户，避免免费账户因 Workers 配额限制请求失败。
+  - **前端与 i18n**：账户新增/编辑弹窗支持配置计划类型（free / paid / enterprise）并提供友好提示，双端国际化语言包同步补全。
+
+### 🐞 修复与优化
+
+- **Worker 定时任务（Cron Triggers）鲁棒性与异常处理修复（双端对称）**：
+  - **空数组清空触发器**：修复部署服务 `deploy/triggers.ts` 中 `crons && crons.length > 0` 导致无法清空已有定时任务的缺陷，调整为 `crons !== undefined`，传递 `[]` 显式清理旧触发器，`undefined` 保持现状。
+  - **Worker 端部署错误识别**：修复 Worker 端仅判断 `resp.ok` 导致 Cloudflare API 返回 200 但包含 `{ success: false, errors: [...] }` 时误报成功的问题。
+  - **接口防崩与校验**：双端 `PUT /:accountId/workers/:name/schedules` 引入 `normalizeCronExpressions`，对非法格式拦截并返回 400 校验错误；增加空请求体兜底，消除 `Cannot destructure` / `SyntaxError` 导致的 500 崩溃。
+  - **前端交互与校验**：`WorkerSettingsDrawer.vue` 实时校验 5 段式 Cron 表达式并给出明确红字提示；修复 `saveSchedules()` 缺少 `catch` 块导致保存失败时静默无响应的问题，保存前自动清洗与去重；纠正 weekly 预设为标准 `0 0 * * SUN`。
+- **前端存储管理（StorageView）账户切换缓存隔离**：
+  - 新增 `resetStorageCaches()`，在切换账户时彻底清空 KV、D1、R2 的选中项与游标缓存，防止跨账户数据残留导致旧资源 ID 错误请求 404。
+  - 修复 R2 可用性探测与 tab 激活时的重复网络请求问题。
+- **前端 AI 各子模块账户下拉选项去重**：
+  - 在 `AiChatView`、`AiImageView`、`AiAudioView`、`AiTranslateView` 中对账户下拉框选项按 `value` 严格去重，避免重复 key 引发的 Naive UI 警告。
+- **凭证加解密（Encryption）兼容性与单元测试覆盖**：
+  - 完善 backend 与 worker 端对 Hex 格式密钥与常规格式密钥的解析兼容，补齐加解密和计划判定的单元测试。
+
 ## [2.2.0] - 2026-09-11
 
 ### ✨ 新功能

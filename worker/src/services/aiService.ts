@@ -241,3 +241,27 @@ export function modelRequiresWorkersPaid(m: any): boolean {
   if (isTruthyValue(m?.require_workers_paid)) return true;
   return false;
 }
+
+// ============ 付费模型名缓存 ============
+// require_workers_paid 只存在于 CF /ai/models/search 的模型元数据里，而账号路由层只拿到
+// 模型名字符串，所以刷新模型列表时顺带记下哪些模型是付费模型，供 selectBestAccount 过滤账号。
+const paidModelNames = new Set<string>();
+
+/** 由 /models 处理路径调用，用最新元数据重建付费模型名集合。 */
+export function cachePaidModelNames(models: any[]): void {
+  paidModelNames.clear();
+  for (const m of models) {
+    const name = m?.name || m?.id;
+    if (name && modelRequiresWorkersPaid(m)) paidModelNames.add(name);
+  }
+}
+
+/** 模型名是否为付费模型。缓存尚未建立时返回 false（保持既有行为，不做额外限制）。 */
+export function isPaidModelName(name: string | null | undefined): boolean {
+  return !!name && paidModelNames.has(name);
+}
+
+/** 清空付费模型名缓存。 */
+export function clearPaidModelCache(): void {
+  paidModelNames.clear();
+}

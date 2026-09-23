@@ -10,6 +10,30 @@ function fromHex(hex: string): Uint8Array {
   return bytes;
 }
 
+/**
+ * 凭据解密失败（最典型原因：ENCRYPTION_KEY 被更换或丢失，与库中密文不再匹配）。
+ *
+ * 单独定义类型的目的是让上层（错误中间件、CF 客户端、批量流程）能把这类失败与普通
+ * 运行时错误区分开，给用户返回可操作的提示，而不是裸的
+ * `The operation failed for an operation-specific reason`。
+ *
+ * 与 backend 端 DecryptError 保持同构（同一 code / statusCode / 文案）。
+ */
+export class DecryptError extends Error {
+  readonly code = 'DECRYPT_FAILED';
+  readonly statusCode = 500;
+
+  constructor(accountLabel?: string, cause?: unknown) {
+    super(
+      accountLabel
+        ? `账号「${accountLabel}」的凭据解密失败：当前 ENCRYPTION_KEY 与库中密文不匹配（通常是更换或丢失了加密密钥）。请在「账号管理」中重新录入该账号的 API 凭证后重试。`
+        : '凭据解密失败：当前 ENCRYPTION_KEY 与库中密文不匹配（通常是更换或丢失了加密密钥）。请在「账号管理」中重新录入该账号的 API 凭证后重试。',
+      cause === undefined ? undefined : { cause },
+    );
+    this.name = 'DecryptError';
+  }
+}
+
 async function deriveKey(raw: string): Promise<CryptoKey> {
   const keyData = /^[0-9a-fA-F]{64}$/.test(raw)
     ? fromHex(raw)
@@ -29,23 +53,30 @@ export async function encrypt(text: string, encryptionKey: string): Promise<stri
 export async function decrypt(encryptedText: string, encryptionKey: string): Promise<string> {
   const key = await deriveKey(encryptionKey);
   const parts = encryptedText.split(':');
-  // 兼容旧 backend 格式（iv:tag:enc，16 字节 IV + 独立 tag）
-  if (parts.length === 3) {
-    const iv = fromHex(parts[0]);
-    const tag = fromHex(parts[1]);
-    const data = fromHex(parts[2]);
-    const combined = new Uint8Array(data.length + tag.length);
-    combined.set(data, 0);
-    combined.set(tag, data.length);
-    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv, tagLength: 128 }, key, combined);
-    return new TextDecoder().decode(decrypted);
-  }
-  if (parts.length !== 2) {
+  // 只有 2 段（当前格式 iv:enc）与 3 段（旧格式 iv:tag:enc）是合法线格式；
+  // 线格式错误属于数据损坏，与「密钥不匹配」是两回事，保持原样抛出。
+  if (parts.length !== 2 && parts.length !== 3) {
     throw new Error('[Encryption] invalid ciphertext format');
   }
-  const [ivHex, dataHex] = parts;
-  const iv = fromHex(ivHex);
-  const data = fromHex(dataHex);
-  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
-  return new TextDecoder().decode(decrypted);
+  try {
+    // 3 段 = 旧 backend 格式（16 字节 IV + 独立 tag）
+    if (parts.length === 3) {
+      const iv = fromHex(parts[0]);
+      const tag = fromHex(parts[1]);
+      const data = fromHex(parts[2]);
+      const combined = new Uint8Array(data.length + tag.length);
+      combined.set(data, 0);
+      combined.set(tag, data.length);
+      const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv, tagLength: 128 }, key, combined);
+      return new TextDecoder().decode(decrypted);
+    }
+    const [ivHex, dataHex] = parts;
+    const iv = fromHex(ivHex);
+    const data = fromHex(dataHex);
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+    return new TextDecoder().decode(decrypted);
+  } catch (err) {
+    // GCM 认证失败（OperationError）= 密钥不匹配或密文被篡改
+    throw new DecryptError(undefined, err);
+  }
 }

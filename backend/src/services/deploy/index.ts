@@ -407,7 +407,7 @@ export async function deployTemplate(opts: DeployOptions): Promise<DeployResult>
       workerDeployed = true;
 
       // Step 2.5: Deploy triggers (cron + routes)
-      const triggerResult = await deployTriggers(account, name, template.crons || [], template.routes || []);
+      const triggerResult = await deployTriggers(account, name, template.crons, template.routes || []);
       warnings.push(...triggerResult.warnings);
     }
 

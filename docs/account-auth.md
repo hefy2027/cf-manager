@@ -44,6 +44,7 @@ API Token 是 Cloudflare 推荐的认证方式，支持细粒度的权限控制�
    - `Account.Browser Rendering:Edit` — 浏览器渲染（截图、PDF、Markdown 等）。**注意**：Cloudflare 较新账户已在权限列表中移除该独立权限（产品已更名为 Browser Run），部分账户可能看不到此项。若列表中无此权限，浏览器渲染功能需改用「Global API Key + Email」（方式二）或确认账户已开通 Browser Rendering/Browser Run 计划。
    - `Account.Cloudflare Tunnel:Edit` — 隧道（cloudflared）管理：创建/删除隧道、读取连接状态、获取隧道 Token、查看与更新 ingress 配置（含隧道绑定域名探测，依赖下方 Zone 级 DNS 权限）
    - `Account.Rulesets:Edit` — 账户级规则集管理（如账户级单重定向 `http_request_redirect` 规则）
+  - `Account.Billing:Read` — **可选**：测试连接时自动识别账号的 Workers 计划类型（免费/付费/企业），决定付费模型（`require_workers_paid`）能否路由到该账号。**没有该权限也能正常使用**：计划类型会保持「免费」默认值，可在「账号管理 → 编辑」里手工选择。
 
    **Zone 级别权限：**
    - `Zone.Zone:Read` — 区域列表读取

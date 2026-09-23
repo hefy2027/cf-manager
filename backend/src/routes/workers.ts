@@ -4,6 +4,7 @@ import { getActiveAccountsByFeature, getAccountById } from '../models/account';
 import { createAuditLog } from '../models/auditLog';
 import { appLogger } from '../services/logger';
 import { mapConcurrent } from '../utils/concurrent';
+import { normalizeCronExpressions } from '../utils/cronValidation';
 import { getAccountOr404, demoDestructiveGuard } from './routeUtils';
 import {
   listWorkers, listPages, deployWorker, deployWorkerFromUrl, deleteWorker, deletePagesProject, getWorkerLogs, WorkerAssetsInput,
@@ -180,9 +181,14 @@ router.put('/:accountId/workers/:name/schedules', async (req: Request, res: Resp
   try {
     const account = getAccountOr404(req, res);
     if (!account) return;
-    const { crons } = req.body;
-    if (!Array.isArray(crons)) { res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'crons must be an array' } }); return; }
-    const result = await updateSchedules(account, req.params.name as string, crons);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const { crons } = body;
+    const normalizedCrons = normalizeCronExpressions(crons);
+    if (!normalizedCrons) {
+      res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'crons must be an array of valid five-field cron expressions' } });
+      return;
+    }
+    const result = await updateSchedules(account, req.params.name as string, normalizedCrons);
     res.json(result);
   } catch (err) { next(err); }
 });

@@ -1,5 +1,5 @@
 import type { Account } from '../db/models';
-import { decrypt } from './encryption';
+import { decrypt, DecryptError } from './encryption';
 import { logger } from './logger';
 
 export class CfApiError extends Error {
@@ -12,15 +12,33 @@ export class CfApiError extends Error {
   }
 }
 
+/** 错误提示里用的账号标识：让用户在几十个账号里知道是哪一个坏了。 */
+function accountLabel(account: Account): string {
+  return account.name ? `${account.name} (ID ${account.id})` : `ID ${account.id}`;
+}
+
+/**
+ * 解密账号凭据。解密失败时补上账号标识后继续抛 DecryptError，
+ * 让上层（errorHandler / 前端提示）能直接告诉用户「哪个账号、该怎么办」。
+ */
+async function decryptCredential(value: string, encryptionKey: string, account: Account): Promise<string> {
+  try {
+    return await decrypt(value, encryptionKey);
+  } catch (err) {
+    if (err instanceof DecryptError) throw new DecryptError(accountLabel(account), err);
+    throw err;
+  }
+}
+
 export async function getAuthHeaders(account: Account, encryptionKey: string): Promise<Record<string, string>> {
   if (account.auth_type === 'token') {
     if (!account.api_token) throw new Error(`Account ${account.id} missing api_token`);
-    const token = await decrypt(account.api_token, encryptionKey);
+    const token = await decryptCredential(account.api_token, encryptionKey, account);
     return { Authorization: `Bearer ${token}` };
   }
   if (!account.api_key) throw new Error(`Account ${account.id} missing api_key`);
   if (!account.email) throw new Error(`Account ${account.id} missing email`);
-  const apiKey = await decrypt(account.api_key, encryptionKey);
+  const apiKey = await decryptCredential(account.api_key, encryptionKey, account);
   return { 'X-Auth-Email': account.email, 'X-Auth-Key': apiKey };
 }
 

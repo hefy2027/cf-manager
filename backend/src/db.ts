@@ -30,6 +30,7 @@ export function initDb(): void {
       is_active       INTEGER DEFAULT 1,
       enabled_features TEXT DEFAULT 'ai,workers,browser_render,dns,storage',
       available_features TEXT DEFAULT '',
+      worker_plan     TEXT DEFAULT 'free',
       proxy_url       TEXT DEFAULT '',
       proxy_enabled   INTEGER DEFAULT 0,
       created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -125,6 +126,9 @@ const MIGRATIONS: Migration[] = [
   // 移除从未在界面上使用的 accounts.password（登录密码）：旧库该列存在则删除，
   // 新库基础建表已不含该列，columnExists 为假直接跳过（见 applyMigrations 的 drop 分支）。
   { version: '0008_accounts_drop_password', table: 'accounts', column: 'password', kind: 'drop', sql: "ALTER TABLE accounts DROP COLUMN password;" },
+  // worker_plan：账号的 Cloudflare Workers 计划类型（'free' 默认 / 'paid' / 'enterprise'），
+  // 用于把付费模型只路由到付费账号；不标即免费。与 worker/src/db/migrations/0010_accounts_worker_plan.sql 对应。
+  { version: '0010_accounts_worker_plan', table: 'accounts', column: 'worker_plan', sql: "ALTER TABLE accounts ADD COLUMN worker_plan TEXT DEFAULT 'free';" },
 ];
 
 function columnExists(db: Database.Database, table: string, column: string): boolean {
