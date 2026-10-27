@@ -15,7 +15,8 @@ export const authMiddleware = createMiddleware<{ Bindings: Env }>(async (c, next
   }
 
   if (authHeader.substring(7) !== c.env.API_SECRET) {
-    return c.json({ error: { code: 'FORBIDDEN', message: 'Invalid API secret' } }, 403);
+    // 与 backend 对齐：凭证错误返回 401，403 留给「已认证但无权操作」的业务场景。
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Invalid API secret' } }, 401);
   }
 
   await next();

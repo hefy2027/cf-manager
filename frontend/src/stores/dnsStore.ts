@@ -9,6 +9,10 @@ export const useDnsStore = defineStore('dns', () => {
   const loading = ref(false);
   const zoneSettings = ref<Record<string, any>>({});
   const settingsLoading = ref(false);
+  // 加载失败时的原因（例如该账号的 API Token 缺少 DNS:Read 权限）。
+  // 保留在 store 里是为了在面板内展示可读提示，而不是只靠一次性的全局 toast。
+  const recordsError = ref('');
+  const settingsError = ref('');
 
   async function fetchDomains() {
     loading.value = true;
@@ -25,11 +29,13 @@ export const useDnsStore = defineStore('dns', () => {
   async function fetchRecords(domain: string) {
     loading.value = true;
     currentDomain.value = domain;
+    recordsError.value = '';
     try {
       const { data } = await dnsApi.getRecords(domain);
       records.value = data;
-    } catch {
+    } catch (err: any) {
       records.value = [];
+      recordsError.value = err?.errorMessage || err?.message || '';
     } finally {
       loading.value = false;
     }
@@ -49,11 +55,13 @@ export const useDnsStore = defineStore('dns', () => {
 
   async function fetchZoneSettings(domain: string) {
     settingsLoading.value = true;
+    settingsError.value = '';
     try {
       const { data } = await dnsApi.getSettings(domain);
       zoneSettings.value = data;
-    } catch {
+    } catch (err: any) {
       zoneSettings.value = {};
+      settingsError.value = err?.errorMessage || err?.message || '';
     } finally {
       settingsLoading.value = false;
     }
@@ -81,6 +89,7 @@ export const useDnsStore = defineStore('dns', () => {
   return {
     domains, records, currentDomain, loading,
     zoneSettings, settingsLoading,
+    recordsError, settingsError,
     fetchDomains, fetchRecords,
     createDomains, deleteDomains,
     fetchZoneSettings, updateZoneSettings, purgeZoneCache, updateZoneStatus,

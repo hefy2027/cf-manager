@@ -94,7 +94,8 @@ app.put('/sources/:id', async (c) => {
 
   const body = await c.req.json();
   if (source.is_default && body.url && body.url !== source.url) {
-    return c.json({ error: { code: 'FORBIDDEN', message: '默认源的 URL 不可修改' } }, 403);
+    // 业务性拒绝：用独立错误码，避免与「鉴权失败」共用一个 code（issue #68）
+    return c.json({ error: { code: 'DEFAULT_SOURCE_LOCKED', message: '默认源的 URL 不可修改' } }, 403);
   }
 
   // If URL changed, re-fetch and validate

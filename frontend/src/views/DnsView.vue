@@ -154,6 +154,17 @@
           >
             <!-- Tab 1: DNS 记录 -->
             <n-tab-pane name="records" :tab="t('dns.records')">
+              <n-alert
+                v-if="dnsStore.recordsError"
+                type="warning"
+                :bordered="false"
+                :show-icon="true"
+                closable
+                style="margin-bottom: 8px; flex-shrink: 0;"
+                @close="dnsStore.recordsError = ''"
+              >
+                {{ dnsStore.recordsError }}
+              </n-alert>
               <div style="display: flex; justify-content: flex-end; margin-bottom: 8px; flex-shrink: 0;">
                 <n-button size="small" type="primary" @click="openAddRecordModal">{{ t('dns.addRecord') }}</n-button>
               </div>
@@ -169,6 +180,17 @@
 
             <!-- Tab 2: Zone 设置 -->
             <n-tab-pane name="settings" :tab="t('dns.zoneSettings')">
+              <n-alert
+                v-if="dnsStore.settingsError"
+                type="warning"
+                :bordered="false"
+                :show-icon="true"
+                closable
+                style="margin-bottom: 8px; flex-shrink: 0;"
+                @close="dnsStore.settingsError = ''"
+              >
+                {{ dnsStore.settingsError }}
+              </n-alert>
               <n-spin :show="dnsStore.settingsLoading">
                 <div class="dns-tab-form-scroll">
                   <n-grid :cols="24" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>

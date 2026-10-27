@@ -18,7 +18,9 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
 
   const token = authHeader.substring(7);
   if (token !== config.apiSecret) {
-    res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Invalid API secret' } });
+    // 凭证错误语义上是 401（而非 403）：403 表示「已认证但无权操作」，
+    // 前端只能据 401 / UNAUTHORIZED 判断会话失效，混用会让业务 403 被误判为登出（issue #68）。
+    res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Invalid API secret' } });
     return;
   }
 

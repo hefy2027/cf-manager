@@ -1,13 +1,25 @@
 import type { Account } from '../db/models';
+import { describeCfBody, mapCfUpstreamError } from './cfError';
 import { decrypt, DecryptError } from './encryption';
 import { logger } from './logger';
 
 export class CfApiError extends Error {
+  /** Cloudflare 上游真实状态码（仅用于日志 / 诊断，不对外透传） */
   status: number;
+  /** 对外返回的状态码：上游 401/403 等一律折算为 502，避免被当成管理端鉴权失败（issue #68） */
+  statusCode: number;
+  /** 对外返回的错误码，如 CF_PERMISSION_DENIED */
+  code: string;
+  upstreamStatus: number;
   body: string;
   constructor(status: number, body: string) {
-    super(`CF API error ${status}: ${body}`);
+    const mapped = mapCfUpstreamError(status, describeCfBody(body));
+    super(mapped.message);
+    this.name = 'CfApiError';
     this.status = status;
+    this.upstreamStatus = status;
+    this.statusCode = mapped.statusCode;
+    this.code = mapped.code;
     this.body = body;
   }
 }

@@ -46,7 +46,18 @@ apiClient.interceptors.response.use(
       error.errorMessage = body?.message || error?.message || i18n.global.t('common.networkError');
     }
 
-    if (error?.response?.status === 401 || (error?.response?.status === 403 && errObj?.code !== 'R2_NOT_ENABLED' && errObj?.code !== 10042)) {
+    // 只有「管理端鉴权失败」才登出：
+    //  - 401：API_SECRET 缺失或错误（backend / worker 的 authMiddleware）
+    //  - 403 + FORBIDDEN：旧版本后端对错误 API_SECRET 的返回，保留兼容
+    // 其它 403 属于业务性拒绝（DEMO_PROTECTED / R2_NOT_ENABLED / DEFAULT_SOURCE_LOCKED 等）；
+    // Cloudflare 上游的 401 / 403（账号 Token 缺权限）已由后端映射为 502 + CF_* 错误码，
+    // 因此不会再因为某个账号授权异常就把整个会话踢掉（issue #68）。
+    const authFailureCodes = new Set(['UNAUTHORIZED', 'INVALID_API_KEY', 'TOKEN_EXPIRED', 'FORBIDDEN']);
+    const status = error?.response?.status;
+    const code = errObj && typeof errObj === 'object' ? errObj.code : undefined;
+    const isAuthFailure = status === 401 || (status === 403 && typeof code === 'string' && authFailureCodes.has(code));
+
+    if (isAuthFailure) {
       localStorage.removeItem('api_token');
       window.dispatchEvent(new Event('auth-expired'));
     }

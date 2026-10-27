@@ -1,5 +1,6 @@
 import { Account } from '../models/account';
 import { getCfClient, getAuthHeaders } from './cfFactory';
+import { CfHttpError } from './cfError';
 import { clearCache } from './accountRouter';
 import { appLogger } from './logger';
 import { getHttpAgentForAccount } from './proxyService';
@@ -38,7 +39,7 @@ async function cfZoneApi(
   });
   if (!resp.ok) {
     const respBody = await resp.text();
-    throw new Error(`CF API error ${resp.status}: ${respBody}`);
+    throw new CfHttpError(resp.status, respBody);
   }
   const data = await resp.json() as any;
   return data?.result ?? data;

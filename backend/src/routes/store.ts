@@ -106,7 +106,8 @@ router.put('/sources/:id', async (req: Request, res: Response, next: NextFunctio
     if (!source) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Source not found' } }); return; }
     const body = req.body;
     if (source.is_default && body.url && body.url !== source.url) {
-      res.status(403).json({ error: { code: 'FORBIDDEN', message: '默认源的 URL 不可修改' } });
+      // 业务性拒绝：用独立错误码，避免与「鉴权失败」共用一个 code（issue #68）
+      res.status(403).json({ error: { code: 'DEFAULT_SOURCE_LOCKED', message: '默认源的 URL 不可修改' } });
       return;
     }
     if (body.url && body.url !== source.url) {

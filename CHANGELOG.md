@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.4.4] - 2026-10-27
+
+### 🐞 修复与优化
+
+- **账号 API Token 权限不足时前端被强制退出（closes #68）**：Cloudflare 对「Token 未授权该 Zone / 缺少 Zone Settings:Read 等」返回 401 / 403，此前被原样透传给浏览器，前端拦截器把任意 403 当作会话失效，清掉 `api_token` 并跳回登录页——表现就是「点开一个域名，报错并自动退出」。
+  - **双端统一映射上游错误**：新增 `services/cfError.ts`（backend 与 worker 内容一致），把上游 401 → `502 CF_AUTH_FAILED`、403 → `502 CF_PERMISSION_DENIED`、429 → `502 CF_RATE_LIMITED`、5xx / 网络错误 → `502 CF_UPSTREAM_ERROR`、其它 4xx → `400 CF_BAD_REQUEST`，并附 Cloudflare 原始错误摘要（如 `9109 Unauthorized to access requested resource`）。上游状态码不再出现在对外响应里，「账号凭证问题」与「本系统鉴权失败」彻底分开。
+  - backend 在 `errorHandler` 中同时识别 SDK（`cloudflare` v6）的 `APIError` 与自建 fetch 封装的 `CfHttpError`（`zoneService` 已改为抛后者）；worker 的 `CfApiError` 自带 `statusCode` / `code`，路由仍可用 `e.body` 判断 R2 未开通（`10042`）等场景。
+  - **鉴权契约纠正**：`API_SECRET` 错误此前返回 `403 FORBIDDEN`（与会话失效混淆），双端改为 `401 UNAUTHORIZED`；store 的「默认源 URL 不可修改」改用独立错误码 `DEFAULT_SOURCE_LOCKED`。前端拦截器只在 `401` 或明确的鉴权错误码（`UNAUTHORIZED` / `INVALID_API_KEY` / `TOKEN_EXPIRED` / 兼容旧后端的 `FORBIDDEN`）时登出，其余 403（`DEMO_PROTECTED`、`R2_NOT_ENABLED` 等）只提示不登出。
+  - **DNS 页体验**：记录列表与 Zone 设置加载失败时，除全局提示外还在面板内显示可关闭的告警条（含具体缺哪个权限），列表保持可用状态而非空白；`dnsStore` 新增 `recordsError` / `settingsError` 承载失败原因。
+  - 新增双端单测 `cfError.test.ts`（backend 12 项、worker 6 项）锁定映射表与「绝不透传 401 / 403」的约束。
+- 无数据库变更，无需迁移。
+
 ## [2.4.3] - 2026-10-27
 
 ### ✨ 新功能
